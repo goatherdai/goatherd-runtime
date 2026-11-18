@@ -3,9 +3,9 @@ module github.com/goatherdai/goatherd-runtime/sandbox/croft
 go 1.26.3
 
 require (
-	github.com/goatherdai/croft v0.9.2-0.20261031191238-a6d5f72a9b04
-	github.com/goatherdai/goatherd-kernel v0.18.0
-	github.com/goatherdai/goatherd-runtime v0.20.0
+	github.com/goatherdai/croft v0.9.3-0.20261118191751-716dbb80a6dd
+	github.com/goatherdai/goatherd-kernel v0.21.1-0.20261118191751-ffd4deddeb22
+	github.com/goatherdai/goatherd-runtime v0.24.1-0.20261118191751-b19de97fec5b
 )
 
 require (
