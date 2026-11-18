@@ -7,7 +7,7 @@ import (
 	"path"
 	"strings"
 
-	trace "github.com/buchenberg/goatherd-kernel"
+	trace "github.com/goatherdai/goatherd-kernel"
 )
 
 // Merge gate schema refs for trace recording (plan 04 §1).

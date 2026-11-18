@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	sbx "github.com/buchenberg/goatherd-runtime/sandbox"
+	sbx "github.com/goatherdai/goatherd-runtime/sandbox"
 )
 
 // These tests run on the platforms CI builds but cannot run containers on —

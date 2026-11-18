@@ -23,12 +23,12 @@ package materialize
 import (
 	"context"
 	"crypto/sha256"
-	substrate "github.com/buchenberg/goatherd-runtime/substrate"
+	substrate "github.com/goatherdai/goatherd-runtime/substrate"
 
 	"encoding/hex"
 
 	"fmt"
-	trace "github.com/buchenberg/goatherd-kernel"
+	trace "github.com/goatherdai/goatherd-kernel"
 	"math"
 	"strings"
 )

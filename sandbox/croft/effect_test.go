@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	trace "github.com/buchenberg/goatherd-kernel"
-	"github.com/buchenberg/goatherd-runtime/effect"
-	sbx "github.com/buchenberg/goatherd-runtime/sandbox"
+	trace "github.com/goatherdai/goatherd-kernel"
+	"github.com/goatherdai/goatherd-runtime/effect"
+	sbx "github.com/goatherdai/goatherd-runtime/sandbox"
 
-	croftlib "github.com/buchenberg/goatherd-croft"
+	croftlib "github.com/goatherdai/croft"
 )
 
 // The adapter must be discoverable as an EffectChanger by type assertion, which

@@ -107,7 +107,7 @@ recorded-operation boundary + evidence persistence, the dispositions
 
 ### 5.1 Where it lives
 
-A new package `github.com/buchenberg/goatherd-runtime/run`, importing the root
+A new package `github.com/goatherdai/goatherd-runtime/run`, importing the root
 `shepherd` package (Scope/ScopeManager), `sandbox`, `sandbox/containment`,
 `sandbox/confinement`. The root hub stays lean; `run` is the orchestration seam
 Python puts in `_vcscore_runtime`.
@@ -328,7 +328,7 @@ first) → Phase 3 (recorded operation + evidence) → Phase 5 (tests throughout
 
 ## 13. Decisions (resolved by the implementation)
 
-1. **Package** — ✅ **`run`** (`github.com/buchenberg/goatherd-runtime/run`).
+1. **Package** — ✅ **`run`** (`github.com/goatherdai/goatherd-runtime/run`).
    Keeps the root hub lean; the wrap is orchestration.
 2. **Recorded-operation shape** — ✅ **runtime-level record, no kernel change**:
    `shepherd.run.executed.v1` appended via `(*Scope).AppendFact` (schema refs are

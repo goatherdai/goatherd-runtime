@@ -15,7 +15,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/buchenberg/goatherd-runtime/sandbox/confinement"
+	"github.com/goatherdai/goatherd-runtime/sandbox/confinement"
 )
 
 // Verdict is a per-connection broker decision.

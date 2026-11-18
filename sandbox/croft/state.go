@@ -5,9 +5,9 @@ package croft
 import (
 	"fmt"
 
-	trace "github.com/buchenberg/goatherd-kernel"
+	trace "github.com/goatherdai/goatherd-kernel"
 
-	croftlib "github.com/buchenberg/goatherd-croft"
+	croftlib "github.com/goatherdai/croft"
 )
 
 // State field keys inside trace.WorkspaceState.Data.

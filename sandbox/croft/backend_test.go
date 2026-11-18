@@ -10,10 +10,10 @@ import (
 	"testing"
 	"time"
 
-	trace "github.com/buchenberg/goatherd-kernel"
-	sbx "github.com/buchenberg/goatherd-runtime/sandbox"
+	trace "github.com/goatherdai/goatherd-kernel"
+	sbx "github.com/goatherdai/goatherd-runtime/sandbox"
 
-	croftlib "github.com/buchenberg/goatherd-croft"
+	croftlib "github.com/goatherdai/croft"
 )
 
 const testImage = "docker.io/library/golang:1.27"

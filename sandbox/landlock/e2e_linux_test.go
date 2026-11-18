@@ -15,14 +15,14 @@ import (
 	"testing"
 	"time"
 
-	trace "github.com/buchenberg/goatherd-kernel"
-	goatherd "github.com/buchenberg/goatherd-runtime"
-	"github.com/buchenberg/goatherd-runtime/run"
-	"github.com/buchenberg/goatherd-runtime/sandbox"
-	"github.com/buchenberg/goatherd-runtime/sandbox/confinement"
-	"github.com/buchenberg/goatherd-runtime/sandbox/containment"
-	"github.com/buchenberg/goatherd-runtime/sandbox/egress"
-	"github.com/buchenberg/goatherd-runtime/sandbox/git"
+	trace "github.com/goatherdai/goatherd-kernel"
+	goatherd "github.com/goatherdai/goatherd-runtime"
+	"github.com/goatherdai/goatherd-runtime/run"
+	"github.com/goatherdai/goatherd-runtime/sandbox"
+	"github.com/goatherdai/goatherd-runtime/sandbox/confinement"
+	"github.com/goatherdai/goatherd-runtime/sandbox/containment"
+	"github.com/goatherdai/goatherd-runtime/sandbox/egress"
+	"github.com/goatherdai/goatherd-runtime/sandbox/git"
 )
 
 // The confined connect helpers' sentinels, dispatched by TestMain.

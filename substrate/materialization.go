@@ -1,7 +1,7 @@
 package substrate
 
 import (
-	trace "github.com/buchenberg/goatherd-kernel"
+	trace "github.com/goatherdai/goatherd-kernel"
 )
 
 // The substrate-reported half of the materialization vocabulary (d7c): the

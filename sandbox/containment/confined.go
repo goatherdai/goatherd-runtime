@@ -3,7 +3,7 @@ package containment
 import (
 	"fmt"
 
-	"github.com/buchenberg/goatherd-runtime/sandbox/confinement"
+	"github.com/goatherdai/goatherd-runtime/sandbox/confinement"
 )
 
 // LaunchConfined is the only real-execution verb on a backend: resolve → profile

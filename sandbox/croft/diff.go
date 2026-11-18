@@ -7,9 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	trace "github.com/buchenberg/goatherd-kernel"
+	trace "github.com/goatherdai/goatherd-kernel"
 
-	croftlib "github.com/buchenberg/goatherd-croft"
+	croftlib "github.com/goatherdai/croft"
 )
 
 // truncatedMarker matches the git backend's, so a caller truncating diffs by

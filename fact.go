@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	trace "github.com/buchenberg/goatherd-kernel"
+	trace "github.com/goatherdai/goatherd-kernel"
 )
 
 // AppendFact appends a capture record on this scope's owner path and returns the

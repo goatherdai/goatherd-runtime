@@ -10,7 +10,7 @@ import (
 	"context"
 	"testing"
 
-	trace "github.com/buchenberg/goatherd-kernel"
+	trace "github.com/goatherdai/goatherd-kernel"
 )
 
 // NewMemStore returns a t.Cleanup-managed in-memory trace store.

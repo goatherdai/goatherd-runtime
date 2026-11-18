@@ -15,8 +15,8 @@ package effect_test
 import (
 	"testing"
 
-	goatherd "github.com/buchenberg/goatherd-runtime"
-	"github.com/buchenberg/goatherd-runtime/effect"
+	goatherd "github.com/goatherdai/goatherd-runtime"
+	"github.com/goatherdai/goatherd-runtime/effect"
 )
 
 func TestScopeSatisfiesFactAppender(t *testing.T) {

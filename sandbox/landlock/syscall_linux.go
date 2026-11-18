@@ -8,7 +8,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/buchenberg/goatherd-runtime/sandbox/containment"
+	"github.com/goatherdai/goatherd-runtime/sandbox/containment"
 )
 
 // Landlock raw syscall numbers, sourced from x/sys so non-amd64 ports are

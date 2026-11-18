@@ -1,9 +1,9 @@
-module github.com/buchenberg/goatherd-runtime
+module github.com/goatherdai/goatherd-runtime
 
 go 1.21
 
 // The runtime composes the kernel (trace store, canonical model, effect bus).
-require github.com/buchenberg/goatherd-kernel v0.21.0
+require github.com/goatherdai/goatherd-kernel v0.21.0
 
 require golang.org/x/text v0.21.0
 

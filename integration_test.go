@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	trace "github.com/buchenberg/goatherd-kernel"
-	goatherd "github.com/buchenberg/goatherd-runtime"
-	"github.com/buchenberg/goatherd-runtime/internal/gittest"
-	"github.com/buchenberg/goatherd-runtime/internal/rttest"
-	sandbox "github.com/buchenberg/goatherd-runtime/sandbox"
-	"github.com/buchenberg/goatherd-runtime/sandbox/git"
-	"github.com/buchenberg/goatherd-runtime/supervisor"
+	trace "github.com/goatherdai/goatherd-kernel"
+	goatherd "github.com/goatherdai/goatherd-runtime"
+	"github.com/goatherdai/goatherd-runtime/internal/gittest"
+	"github.com/goatherdai/goatherd-runtime/internal/rttest"
+	sandbox "github.com/goatherdai/goatherd-runtime/sandbox"
+	"github.com/goatherdai/goatherd-runtime/sandbox/git"
+	"github.com/goatherdai/goatherd-runtime/supervisor"
 )
 
 // TestIntegration_RollbackScenario exercises the full rollback flow:

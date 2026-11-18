@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/buchenberg/goatherd-runtime/sandbox/containment"
+	"github.com/goatherdai/goatherd-runtime/sandbox/containment"
 )
 
 func requireSh(t *testing.T) string {

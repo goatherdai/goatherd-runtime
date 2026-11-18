@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	trace "github.com/buchenberg/goatherd-kernel"
+	trace "github.com/goatherdai/goatherd-kernel"
 )
 
 // FactAppender is the seam Emit needs: somewhere to append a capture record,

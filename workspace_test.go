@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	trace "github.com/buchenberg/goatherd-kernel"
-	"github.com/buchenberg/goatherd-runtime/internal/gittest"
+	trace "github.com/goatherdai/goatherd-kernel"
+	"github.com/goatherdai/goatherd-runtime/internal/gittest"
 )
 
 // rmFile removes a file from the test repo, failing the test on error.

@@ -12,9 +12,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/buchenberg/goatherd-runtime/internal/gittest"
-	sbx "github.com/buchenberg/goatherd-runtime/sandbox"
-	"github.com/buchenberg/goatherd-runtime/sandbox/git"
+	"github.com/goatherdai/goatherd-runtime/internal/gittest"
+	sbx "github.com/goatherdai/goatherd-runtime/sandbox"
+	"github.com/goatherdai/goatherd-runtime/sandbox/git"
 )
 
 func TestGitBackendIsRegistered(t *testing.T) {

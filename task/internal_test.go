@@ -8,7 +8,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/buchenberg/goatherd-runtime/internal/rttest"
+	"github.com/goatherdai/goatherd-runtime/internal/rttest"
 )
 
 // TestAbandonWithoutTerminalCutoffFails pins Abandon's single read: a child

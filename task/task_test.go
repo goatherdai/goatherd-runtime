@@ -8,10 +8,10 @@ package task_test
 import (
 	"context"
 	"encoding/json"
-	trace "github.com/buchenberg/goatherd-kernel"
-	"github.com/buchenberg/goatherd-kernel/testkit"
-	"github.com/buchenberg/goatherd-runtime/internal/rttest"
-	"github.com/buchenberg/goatherd-runtime/task"
+	trace "github.com/goatherdai/goatherd-kernel"
+	"github.com/goatherdai/goatherd-kernel/testkit"
+	"github.com/goatherdai/goatherd-runtime/internal/rttest"
+	"github.com/goatherdai/goatherd-runtime/task"
 	"strings"
 	"testing"
 )

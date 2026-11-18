@@ -13,8 +13,8 @@ import (
 	"fmt"
 	"strings"
 
-	trace "github.com/buchenberg/goatherd-kernel"
-	substrate "github.com/buchenberg/goatherd-runtime/substrate"
+	trace "github.com/goatherdai/goatherd-kernel"
+	substrate "github.com/goatherdai/goatherd-runtime/substrate"
 )
 
 // isValidOutcome reports whether an outcome is one of the three vocabulary

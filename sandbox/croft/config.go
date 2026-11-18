@@ -4,8 +4,8 @@ import (
 	"context"
 	"errors"
 
-	trace "github.com/buchenberg/goatherd-kernel"
-	"github.com/buchenberg/goatherd-runtime/effect"
+	trace "github.com/goatherdai/goatherd-kernel"
+	"github.com/goatherdai/goatherd-runtime/effect"
 )
 
 // BackendName is the registry key this backend answers to, and the value

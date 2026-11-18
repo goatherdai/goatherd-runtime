@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	trace "github.com/buchenberg/goatherd-kernel"
-	"github.com/buchenberg/goatherd-runtime/internal/gittest"
-	sbx "github.com/buchenberg/goatherd-runtime/sandbox"
+	trace "github.com/goatherdai/goatherd-kernel"
+	"github.com/goatherdai/goatherd-runtime/internal/gittest"
+	sbx "github.com/goatherdai/goatherd-runtime/sandbox"
 )
 
 // samePath reports whether two paths refer to the same location, resolving

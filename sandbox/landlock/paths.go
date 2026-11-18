@@ -2,7 +2,7 @@ package landlock
 
 import (
 	"encoding/json"
-	"github.com/buchenberg/goatherd-runtime/sandbox/confinement"
+	"github.com/goatherdai/goatherd-runtime/sandbox/confinement"
 )
 
 // netPolicy is the backend-private network pin within a profile.

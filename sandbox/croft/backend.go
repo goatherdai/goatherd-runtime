@@ -9,10 +9,10 @@ import (
 	"io/fs"
 	"time"
 
-	trace "github.com/buchenberg/goatherd-kernel"
-	sbx "github.com/buchenberg/goatherd-runtime/sandbox"
+	trace "github.com/goatherdai/goatherd-kernel"
+	sbx "github.com/goatherdai/goatherd-runtime/sandbox"
 
-	croftlib "github.com/buchenberg/goatherd-croft"
+	croftlib "github.com/goatherdai/croft"
 )
 
 // createCeiling bounds a Create whose spec carries no Timeout.

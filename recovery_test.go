@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	trace "github.com/buchenberg/goatherd-kernel"
-	"github.com/buchenberg/goatherd-runtime/internal/gittest"
-	sandbox "github.com/buchenberg/goatherd-runtime/sandbox"
-	"github.com/buchenberg/goatherd-runtime/sandbox/git"
+	trace "github.com/goatherdai/goatherd-kernel"
+	"github.com/goatherdai/goatherd-runtime/internal/gittest"
+	sandbox "github.com/goatherdai/goatherd-runtime/sandbox"
+	"github.com/goatherdai/goatherd-runtime/sandbox/git"
 )
 
 // reopenStore closes the store and reopens the same database file, the

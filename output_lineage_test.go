@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/buchenberg/goatherd-runtime/sandbox/git"
+	"github.com/goatherdai/goatherd-runtime/sandbox/git"
 )
 
 func TestLineage_ForkFromOutputRecordsDerivedFrom(t *testing.T) {

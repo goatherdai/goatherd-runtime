@@ -658,7 +658,7 @@ the root module; the **backend** is a nested module so the root keeps its
 folded into the root module.
 
 ```
-goatherd-runtime/                       module: github.com/buchenberg/goatherd-runtime (go 1.21)
+goatherd-runtime/                       module: github.com/goatherdai/goatherd-runtime (go 1.21)
 │                                            deps: kernel + stdlib ONLY (invariant preserved)
 ├── sandbox/
 │   ├── sandbox.go                         # Sandbox iface (unchanged)

@@ -3,8 +3,8 @@ package goatherd
 import (
 	"context"
 	"fmt"
-	trace "github.com/buchenberg/goatherd-kernel"
-	sandbox "github.com/buchenberg/goatherd-runtime/sandbox"
+	trace "github.com/goatherdai/goatherd-kernel"
+	sandbox "github.com/goatherdai/goatherd-runtime/sandbox"
 	"log/slog"
 )
 

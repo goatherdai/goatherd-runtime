@@ -15,9 +15,9 @@ import (
 	"strings"
 	"testing"
 
-	trace "github.com/buchenberg/goatherd-kernel"
-	sandbox "github.com/buchenberg/goatherd-runtime/sandbox"
-	"github.com/buchenberg/goatherd-runtime/sandbox/git"
+	trace "github.com/goatherdai/goatherd-kernel"
+	sandbox "github.com/goatherdai/goatherd-runtime/sandbox"
+	"github.com/goatherdai/goatherd-runtime/sandbox/git"
 )
 
 // newForkWorktree provisions a worktree sandbox for a fork test and returns

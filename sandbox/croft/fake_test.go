@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	croftlib "github.com/buchenberg/goatherd-croft"
+	croftlib "github.com/goatherdai/croft"
 )
 
 // fakeCroft is an in-memory croftlib.Sandbox. It lets every conversion in this

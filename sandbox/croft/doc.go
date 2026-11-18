@@ -1,5 +1,5 @@
 // Package croft is the containerd sandbox backend: it puts
-// github.com/buchenberg/goatherd-croft behind the sandbox package's registry
+// github.com/goatherdai/croft behind the sandbox package's registry
 // seam as backend "containerd", so a container workspace is addressable
 // through OpenSandbox exactly like the git backend is.
 //

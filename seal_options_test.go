@@ -15,9 +15,9 @@ import (
 	"testing"
 	"unicode/utf8"
 
-	trace "github.com/buchenberg/goatherd-kernel"
-	sandbox "github.com/buchenberg/goatherd-runtime/sandbox"
-	"github.com/buchenberg/goatherd-runtime/sandbox/git"
+	trace "github.com/goatherdai/goatherd-kernel"
+	sandbox "github.com/goatherdai/goatherd-runtime/sandbox"
+	"github.com/goatherdai/goatherd-runtime/sandbox/git"
 )
 
 // sealOptionsFixture builds a parent and one worktree child with a small

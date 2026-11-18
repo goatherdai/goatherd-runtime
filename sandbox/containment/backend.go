@@ -22,7 +22,7 @@ package containment
 
 import (
 	"errors"
-	"github.com/buchenberg/goatherd-runtime/sandbox/confinement"
+	"github.com/goatherdai/goatherd-runtime/sandbox/confinement"
 	"time"
 )
 

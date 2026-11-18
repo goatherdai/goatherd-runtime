@@ -4,14 +4,14 @@ package landlock
 
 import (
 	"context"
-	"github.com/buchenberg/goatherd-runtime/sandbox/containment"
+	"github.com/goatherdai/goatherd-runtime/sandbox/containment"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 
-	sbx "github.com/buchenberg/goatherd-runtime/sandbox"
-	"github.com/buchenberg/goatherd-runtime/sandbox/git"
+	sbx "github.com/goatherdai/goatherd-runtime/sandbox"
+	"github.com/goatherdai/goatherd-runtime/sandbox/git"
 )
 
 // TestIntegration_GitSandboxPaddockExec exercises the whole stack end to end:

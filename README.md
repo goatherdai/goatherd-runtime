@@ -1,10 +1,10 @@
 # goatherd-runtime
 
-The runtime layer of the [`Goatherd kernel`](https://github.com/buchenberg/goatherd-kernel): the execution scope tree, the merge gate, settlement and recovery, the sandbox backends, the substrate/materialize layer, the task runtime, and the supervision rules engine.
+The runtime layer of the [`Goatherd kernel`](https://github.com/goatherdai/goatherd-kernel): the execution scope tree, the merge gate, settlement and recovery, the sandbox backends, the substrate/materialize layer, the task runtime, and the supervision rules engine.
 
 It composes the trace kernel (record model, canonical JSON, SQLite store, effect bus, projections) — and adds the primitives that *use* a trace: branching execution, workspace capture/restore, reversible settlement, and supervised task handles.
 
-> **Module scope.** The kernel module owns the durable trace: the record model, the store, the effect bus, and the execution/history projections. This module owns everything above it. Trace types (`trace.Record`, `trace.SQLiteTraceStore`, `trace.WorkspaceState`, …) come from `github.com/buchenberg/goatherd-kernel` (package `trace`, the kernel's module root).
+> **Module scope.** The kernel module owns the durable trace: the record model, the store, the effect bus, and the execution/history projections. This module owns everything above it. Trace types (`trace.Record`, `trace.SQLiteTraceStore`, `trace.WorkspaceState`, …) come from `github.com/goatherdai/goatherd-kernel` (package `trace`, the kernel's module root).
 
 ## Packages
 
@@ -57,7 +57,7 @@ A backend that cannot enforce the requested network mode refuses it rather than 
 The runtime requires the kernel for the trace store, the record vocabulary, and the shared public `testkit` package:
 
 ```
-require github.com/buchenberg/goatherd-kernel v0.18.0
+require github.com/goatherdai/goatherd-kernel v0.18.0
 ```
 
 The root module also has one direct non-kernel dependency, `golang.org/x/text`, used by confinement path normalization. The root module's SQLite driver and support modules are indirect. The platform containment backends and `sandbox/croft` live in nested modules and carry their own dependency sets; `sandbox/git` ships in the root module. `sandbox/croft` is the one that pulls containerd and the OCI tree. The root carries no `replace` directive, so modules resolve from the proxy like any other dependency.
@@ -538,5 +538,5 @@ gofmt -l .            # must be empty
 
 ## History
 
-Extracted unchanged from `github.com/buchenberg/goatherd-kernel` (fresh
+Extracted unchanged from `github.com/goatherdai/goatherd-kernel` (fresh
 history; the original history remains in that repository's log).

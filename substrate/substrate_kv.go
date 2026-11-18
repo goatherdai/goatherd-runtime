@@ -14,7 +14,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
-	trace "github.com/buchenberg/goatherd-kernel"
+	trace "github.com/goatherdai/goatherd-kernel"
 	"strings"
 	"sync"
 )

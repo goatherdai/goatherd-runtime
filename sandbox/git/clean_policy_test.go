@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	trace "github.com/buchenberg/goatherd-kernel"
+	trace "github.com/goatherdai/goatherd-kernel"
 )
 
 // cpGit runs a git command in dir, failing the test on a non-zero exit.

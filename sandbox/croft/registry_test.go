@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	sbx "github.com/buchenberg/goatherd-runtime/sandbox"
+	sbx "github.com/goatherdai/goatherd-runtime/sandbox"
 )
 
 func TestRegistry_OpenSandboxResolves(t *testing.T) {

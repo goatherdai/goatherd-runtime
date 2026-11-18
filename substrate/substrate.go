@@ -27,7 +27,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	trace "github.com/buchenberg/goatherd-kernel"
+	trace "github.com/goatherdai/goatherd-kernel"
 	"reflect"
 )
 

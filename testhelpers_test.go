@@ -8,11 +8,11 @@ package goatherd
 import (
 	"testing"
 
-	trace "github.com/buchenberg/goatherd-kernel"
+	trace "github.com/goatherdai/goatherd-kernel"
 
-	"github.com/buchenberg/goatherd-kernel/testkit"
-	"github.com/buchenberg/goatherd-runtime/internal/gittest"
-	"github.com/buchenberg/goatherd-runtime/internal/rttest"
+	"github.com/goatherdai/goatherd-kernel/testkit"
+	"github.com/goatherdai/goatherd-runtime/internal/gittest"
+	"github.com/goatherdai/goatherd-runtime/internal/rttest"
 )
 
 func newMemStore(t *testing.T) *trace.SQLiteTraceStore { return rttest.NewMemStore(t) }

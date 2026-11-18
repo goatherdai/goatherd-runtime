@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	trace "github.com/buchenberg/goatherd-kernel"
-	goatherd "github.com/buchenberg/goatherd-runtime"
+	trace "github.com/goatherdai/goatherd-kernel"
+	goatherd "github.com/goatherdai/goatherd-runtime"
 )
 
 // InterventionType identifies the kind of supervisor action.

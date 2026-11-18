@@ -8,14 +8,14 @@ import (
 	"path/filepath"
 	"testing"
 
-	trace "github.com/buchenberg/goatherd-kernel"
-	goatherd "github.com/buchenberg/goatherd-runtime"
-	"github.com/buchenberg/goatherd-runtime/internal/gittest"
-	"github.com/buchenberg/goatherd-runtime/internal/rttest"
-	"github.com/buchenberg/goatherd-runtime/sandbox"
-	"github.com/buchenberg/goatherd-runtime/sandbox/confinement"
-	"github.com/buchenberg/goatherd-runtime/sandbox/containment"
-	"github.com/buchenberg/goatherd-runtime/sandbox/git"
+	trace "github.com/goatherdai/goatherd-kernel"
+	goatherd "github.com/goatherdai/goatherd-runtime"
+	"github.com/goatherdai/goatherd-runtime/internal/gittest"
+	"github.com/goatherdai/goatherd-runtime/internal/rttest"
+	"github.com/goatherdai/goatherd-runtime/sandbox"
+	"github.com/goatherdai/goatherd-runtime/sandbox/confinement"
+	"github.com/goatherdai/goatherd-runtime/sandbox/containment"
+	"github.com/goatherdai/goatherd-runtime/sandbox/git"
 )
 
 func newManager(t *testing.T) *goatherd.ScopeManager {

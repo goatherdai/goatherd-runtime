@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/buchenberg/goatherd-runtime/internal/gittest"
-	"github.com/buchenberg/goatherd-runtime/sandbox/git"
+	"github.com/goatherdai/goatherd-runtime/internal/gittest"
+	"github.com/goatherdai/goatherd-runtime/sandbox/git"
 )
 
 // TestSeal_FreezesChanges covers T3.5's Seal: registered output, classified

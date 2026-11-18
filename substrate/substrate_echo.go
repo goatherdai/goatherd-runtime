@@ -8,7 +8,7 @@ package substrate
 import (
 	"context"
 
-	trace "github.com/buchenberg/goatherd-kernel"
+	trace "github.com/goatherdai/goatherd-kernel"
 )
 
 // EchoSubstrate echoes declaration payloads into capture drafts.

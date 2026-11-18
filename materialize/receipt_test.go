@@ -11,7 +11,7 @@ import (
 	"reflect"
 	"testing"
 
-	substrate "github.com/buchenberg/goatherd-runtime/substrate"
+	substrate "github.com/goatherdai/goatherd-runtime/substrate"
 )
 
 func goldenReceipt() MaterializationReceipt {

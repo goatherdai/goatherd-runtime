@@ -3,9 +3,9 @@ package goatherd
 import (
 	"context"
 	"fmt"
-	trace "github.com/buchenberg/goatherd-kernel"
-	sandbox "github.com/buchenberg/goatherd-runtime/sandbox"
-	"github.com/buchenberg/goatherd-runtime/sandbox/git"
+	trace "github.com/goatherdai/goatherd-kernel"
+	sandbox "github.com/goatherdai/goatherd-runtime/sandbox"
+	"github.com/goatherdai/goatherd-runtime/sandbox/git"
 	"os"
 	"path/filepath"
 	"strings"

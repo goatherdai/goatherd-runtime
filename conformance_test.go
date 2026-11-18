@@ -32,7 +32,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	trace "github.com/buchenberg/goatherd-kernel"
+	trace "github.com/goatherdai/goatherd-kernel"
 	"path/filepath"
 	"strings"
 	"testing"

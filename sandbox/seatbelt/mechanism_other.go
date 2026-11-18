@@ -5,7 +5,7 @@ package seatbelt
 import (
 	"fmt"
 
-	"github.com/buchenberg/goatherd-runtime/sandbox/containment"
+	"github.com/goatherdai/goatherd-runtime/sandbox/containment"
 )
 
 // available reports the backend as unavailable off macOS.

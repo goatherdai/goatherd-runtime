@@ -715,7 +715,7 @@ enough that a nested module — not a repo — is the right weight.
 ### 15.2 Package → module assignment
 
 ```
-goatherd-runtime/                       module: github.com/buchenberg/goatherd-runtime (go 1.21)
+goatherd-runtime/                       module: github.com/goatherdai/goatherd-runtime (go 1.21)
 │                                            deps: kernel + stdlib ONLY (invariant preserved)
 ├── sandbox/
 │   ├── sandbox.go                         # Sandbox iface; ExecRequest gains Confinement + Placement
@@ -729,7 +729,7 @@ goatherd-runtime/                       module: github.com/buchenberg/goatherd-r
 │   │   ├── plan.go                        #   PermissionPlan, monitors, digest
 │   │   └── placement.go                   #   Placement (paddock / advisory / auto)
 │   ├── git/                               # GitSandbox — ONE consumer of the contract
-│   └── landlock/                          # ★ NESTED MODULE: github.com/buchenberg/goatherd-runtime/sandbox/landlock
+│   └── landlock/                          # ★ NESTED MODULE: github.com/goatherdai/goatherd-runtime/sandbox/landlock
 │       ├── go.mod                         #   requires golang.org/x/sys (direct) + the root runtime
 │       ├── syscall_linux.go               #   ABI, WriteAccessMask, Confine (raw syscalls)
 │       ├── syscall_other.go               #   //go:build !linux
@@ -779,7 +779,7 @@ prevent.
   toolchain it propagates the nested module's `require` on the parent into the
   root module's build and breaks it (the parent is not published at a resolvable
   version). The working mechanism is a dev-time `replace
-  github.com/buchenberg/goatherd-runtime => ../..` in the nested `go.mod`
+  github.com/goatherdai/goatherd-runtime => ../..` in the nested `go.mod`
   (the same pattern the kernel/runtime used), dropped at release when the root is
   tagged. See §16.2 #6.
 - **Language version.** The nested module can set its own `go` directive
@@ -840,7 +840,7 @@ only `sandbox/landlock` pulls `golang.org/x/sys` directly.
    the nested module's `require` on the parent into the root module's *own* build
    and breaks it (`checkpoint.go:7:2: ... goatherd-runtime@v0.17.0: unknown
    revision`), because the parent is not published at a resolvable version. The
-   working mechanism is `replace github.com/buchenberg/goatherd-runtime => ../..`
+   working mechanism is `replace github.com/goatherdai/goatherd-runtime => ../..`
    in `sandbox/landlock/go.mod`, which also required the nested module to carry
    its own `go.sum` for the parent's transitive deps. This is the same dev-time
    pattern the kernel/runtime used; it is dropped at release when the root is

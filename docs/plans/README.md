@@ -306,7 +306,7 @@ Plan 7 (yaah integration) depends on a released runtime (Phase 0) + Plan 4a (mac
   (`v0.21.0`, pinned to keep the module's `go 1.21` directive). This is the one
   deliberate relaxation of the root module's "kernel + stdlib only" footprint.
 - **Nested module with a dev-time `replace`.** `sandbox/landlock` is its own
-  module; its `go.mod` carries `replace github.com/buchenberg/goatherd-runtime
+  module; its `go.mod` carries `replace github.com/goatherdai/goatherd-runtime
   => ../..` for local development, dropped at release when the root is tagged.
   A repo-root `go.work` was tried and rejected (it propagates the nested
   require into the root build).

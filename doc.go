@@ -16,23 +16,23 @@
 //
 // The kernel's components publish as their own packages, imported directly:
 //
-//   - github.com/buchenberg/goatherd-kernel/trace — the record model,
+//   - github.com/goatherdai/goatherd-kernel/trace — the record model,
 //     canonical JSON, the SQLite trace store, and the effect bus
-//   - github.com/buchenberg/goatherd-runtime/sandbox — the Sandbox
+//   - github.com/goatherdai/goatherd-runtime/sandbox — the Sandbox
 //     interface and the backend registry
-//   - github.com/buchenberg/goatherd-runtime/sandbox/git — the git
+//   - github.com/goatherdai/goatherd-runtime/sandbox/git — the git
 //     backend (in-place and detached-worktree modes); self-registers as
 //     "git"
-//   - github.com/buchenberg/goatherd-runtime/substrate — the Substrate
+//   - github.com/goatherdai/goatherd-runtime/substrate — the Substrate
 //     contract and the echo/KV/workspace substrates
-//   - github.com/buchenberg/goatherd-runtime/materialize — the
+//   - github.com/goatherdai/goatherd-runtime/materialize — the
 //     materialize orchestrator
-//   - github.com/buchenberg/goatherd-runtime/task — the task runtime:
+//   - github.com/goatherdai/goatherd-runtime/task — the task runtime:
 //     StartTaskSync/StartTask, Run, TaskControl, ChildHandle with spawn/
 //     adopt/abandon relations
-//   - github.com/buchenberg/goatherd-runtime/run — the reference reversible
+//   - github.com/goatherdai/goatherd-runtime/run — the reference reversible
 //     run composition: fork, handler, review, seal/settle
-//   - github.com/buchenberg/goatherd-runtime/supervisor — the rules
+//   - github.com/goatherdai/goatherd-runtime/supervisor — the rules
 //     engine that observes the effect bus and can inject, fork, discard,
 //     halt, or deny
 //
