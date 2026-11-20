@@ -523,6 +523,50 @@ func gitWorktreeRegistered(ctx context.Context, repo *gitRunner, worktreePath st
 	return false, nil
 }
 
+// IsRegisteredWorktree reports whether this sandbox's worktree path is
+// currently listed as a worktree of the repository, using the NUL-safe
+// registry listing (paths with newlines and quoted names survive). The
+// exported form of isRegisteredWorktree for callers outside the package
+// that need the same liveness check (the janitor's re-verification before
+// deletion).
+func (g *GitSandbox) IsRegisteredWorktree(ctx context.Context) (bool, error) {
+	registered, _, err := g.isRegisteredWorktree(ctx)
+	return registered, err
+}
+
+// RemoveOrphanDeregistered deletes a worktree directory that git's
+// registry no longer lists — the teardown-missed orphan. Destroy refuses
+// these by design (fail-closed on unregistered paths); the janitor's
+// contract is precisely to reclaim them, but only after the caller has
+// re-verified ownership (the .git file still points into this repo's
+// administration) and live-ness. The removal here is the same sequence
+// Destroy uses for a registered worktree: git remove (harmless failure
+// when the registry entry is gone), then the tree, then prune — with the
+// main-worktree guard and the no-fallback-on-unproven rule intact.
+func (g *GitSandbox) RemoveOrphanDeregistered(ctx context.Context) error {
+	repo := g.repo()
+	// git worktree remove fails harmlessly when the registry no longer
+	// lists the path (the orphan case); proceed to the tree removal.
+	_, _ = repo.run(ctx, "worktree", "remove", "--force", g.worktreePath)
+	if _, statErr := os.Lstat(g.worktreePath); os.IsNotExist(statErr) {
+		return nil
+	} else if statErr != nil {
+		return fmt.Errorf("git sandbox: inspect orphan worktree %s: %w", g.worktreePath, statErr)
+	}
+	// The main-worktree guard: never remove the repository root itself.
+	if sameDirPath(filepath.Clean(g.worktreePath), filepath.Clean(g.repoPath)) {
+		return fmt.Errorf("git sandbox: refusing to remove the repository's main worktree %s", g.worktreePath)
+	}
+	if err := os.RemoveAll(g.worktreePath); err != nil {
+		return fmt.Errorf("git sandbox: remove orphan worktree %s: %w", g.worktreePath, err)
+	}
+	// Prune the registry so no stale entry survives.
+	if _, err := repo.run(context.WithoutCancel(ctx), "worktree", "prune"); err != nil {
+		return fmt.Errorf("git sandbox: prune after orphan removal: %w", err)
+	}
+	return nil
+}
+
 // isRegisteredWorktree is gitWorktreeRegistered for this sandbox's worktree
 // path, also returning the path after relative-to-repo resolution — the same
 // resolution the backend's git subprocesses apply (repo.run sets cmd.Dir to
