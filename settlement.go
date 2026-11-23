@@ -114,8 +114,17 @@ func singleSealOptions(opts []SealOptions) (SealOptions, error) {
 		if opt.Finalization.Context != nil && opt.SealContext != nil {
 			return SealOptions{}, errors.New("seal: set either Finalization.Context or SealContext, not both")
 		}
-		if opt.SealContext != nil && opt.Finalization.Context == nil && opt.Finalization.Mode == "" && opt.Finalization.Timeout == 0 {
-			opt.Finalization = FinalizationOptions{Context: opt.SealContext, Mode: FinalizationInherit}
+		if opt.SealContext != nil && opt.Finalization.Context == nil {
+			// Preserve any mode/timeout the caller also supplied; only the
+			// default mode is Inherit, matching v0.25.0's alias semantics.
+			if opt.Finalization.Mode == "" {
+				opt.Finalization.Mode = FinalizationInherit
+			}
+			opt.Finalization.Context = opt.SealContext
+			// ScopeManager.Seal normalizes options before handing them to
+			// Scope.Seal; clearing the alias prevents a second mapping from
+			// looking like a conflict.
+			opt.SealContext = nil
 		}
 		switch opt.Finalization.Mode {
 		case "", FinalizationDetached, FinalizationInherit:
@@ -429,6 +438,18 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 		return nil, &SealError{Stage: "preflight", Err: fmt.Errorf("%w: %v", ErrSealDeadlineBeforePersist, err)}
 	}
 
+	// A caller-supplied transcript must be a real, digest-verified fact on
+	// this scope. Rejecting it before the artifact is written keeps every
+	// surfaced handle capable of reseeding its own conversation.
+	var transcriptBytes []byte
+	if opt.TranscriptID != "" {
+		var err error
+		transcriptBytes, err = verifyTranscriptRef(sealCtx, s.store, ownerID, scopeID, opt.TranscriptID)
+		if err != nil {
+			return nil, &SealError{Stage: "transcript", Err: err}
+		}
+	}
+
 	// Tier 1: the recovery handle exists before capture, diff, or any blob
 	// write, so a failure at any later stage can always name an artifact.
 	// The prospective output id is reserved here too: failed-seal blobs use
@@ -440,13 +461,43 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 	if err := recordSealArtifact(sealCtx, s.store, ownerID, scopeID, artifactID, outputID, opt.AttemptID, opt.TranscriptID, baseline, derivedFrom, opt.Supersedes); err != nil {
 		return nil, &SealError{Stage: "artifact", Err: err}
 	}
+	var captured trace.WorkspaceState
+	var changeList []ProposedChange
+	var diffText string
+	var metadata []byte
 	failWith := func(stage string, cause error, written []sealBlobRef) (*RetainedOutput, error) {
-		names := make([]string, 0, len(written))
-		for _, b := range written {
-			names = append(names, b.kind)
+		blobs := valueKinds(written)
+		present := make([]string, 0, 3)
+		if diffText != "" {
+			present = append(present, "diff")
 		}
-		recordSealFailed(sealCtx, s.store, ownerID, artifactID, stage, cause.Error(), names)
-		return nil, &SealError{Stage: stage, ArtifactID: artifactID, Err: cause}
+		if len(metadata) > 0 && opt.TranscriptID == "" {
+			present = append(present, "metadata")
+		}
+		recordSealFailed(sealCtx, s.store, ownerID, artifactID, stage, cause.Error(), present, blobs)
+		handle := &FailedSeal{
+			ID:                artifactID,
+			ArtifactID:        artifactID,
+			OutputID:          outputID,
+			ScopeID:           scopeID,
+			OwnerID:           ownerID,
+			AttemptID:         opt.AttemptID,
+			TranscriptID:      opt.TranscriptID,
+			Transcript:        transcriptBytes,
+			TranscriptInvalid: opt.TranscriptID != "" && transcriptBytes == nil,
+			Workspace:         captured,
+			Baseline:          baseline,
+			Changes:           changeList,
+			Diff:              diffText,
+			Metadata:          metadata,
+			Values:            present,
+			Blobs:             blobs,
+			CreatedAt:         time.Now().UnixNano(),
+			Stage:             stage,
+			Reason:            cause.Error(),
+			Adopted:           true, // the scope's own sandbox is still live here
+		}
+		return nil, &SealError{Stage: stage, ArtifactID: artifactID, Err: cause, Handle: handle}
 	}
 	fail := func(stage string, cause error) (*RetainedOutput, error) {
 		return failWith(stage, cause, nil)
@@ -475,6 +526,7 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 	retainedDiff, diffTruncated := boundDiff(diff, opt.DiffCap)
 	changes := classifyChanges(diff, files)
 	stateDigest, _ := ws.Digest()
+	captured, changeList, diffText = ws, changes, retainedDiff
 
 	// Tier 2 metadata: workspace state and the change list are small and
 	// inline, so they survive even when the larger values cannot be written.
@@ -525,12 +577,17 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 		"changes":  changesPayload(out.changes),
 	}
 	out.artifactID = artifactID
+	metadata = out.metadata
+	// A later successful seal of the same scope resolves earlier artifacts
+	// even when it uses a fresh artifact id (a direct retry).
+	payload["sealed_at"] = out.sealedAt.UnixNano()
 	if opt.TranscriptID != "" {
 		// The conversation is durable in its own fact; do not duplicate it
 		// into the sealed payload or the blob store. The in-memory accessor
-		// still reports it, and recovery restores it from the same fact.
+		// still reports the already-verified bytes, and recovery restores
+		// them from the same fact.
 		payload["transcript_id"] = opt.TranscriptID
-		out.snapshot = loadTranscript(sealCtx, s.store, ownerID, opt.TranscriptID)
+		out.snapshot = transcriptBytes
 	}
 	// Lineage is recorded on the output's own fact; the reverse edge
 	// (supersededBy) is derived from a later output's supersedes value at
@@ -559,7 +616,7 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 	if err := putSealText(sealCtx, s.store, ownerID, outputID, sealBlobDiff, "diff", payload, retainedDiff, &written); err != nil {
 		return failWith("persist_diff", err, written)
 	}
-	if len(out.snapshot) > 0 {
+	if len(out.snapshot) > 0 && opt.TranscriptID == "" {
 		if err := sealCtx.Err(); err != nil {
 			return failWith("persist_snapshot", fmt.Errorf("%w: %v", ErrSealDeadlineBeforePersist, err), written)
 		}
@@ -575,12 +632,26 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 			return failWith("persist_metadata", err, written)
 		}
 	}
-	if len(written) > 0 {
-		if err := recordSealValues(sealCtx, s.store, ownerID, artifactID, map[string]any{
-			"values": valueKinds(written),
-		}); err != nil {
-			return failWith("values", err, written)
+	// Always record the values that landed, including inline ones: they live
+	// only in the sealed payload, which never arrives when the append fails.
+	present := []string{"diff"}
+	if len(out.metadata) > 0 {
+		present = append(present, "metadata")
+	}
+	if len(out.snapshot) > 0 && opt.TranscriptID == "" {
+		present = append(present, "snapshot")
+	}
+	valuesPayload := map[string]any{
+		"values": present,
+		"blobs":  valueKinds(written),
+	}
+	for _, key := range []string{"diff", "metadata", "snapshot"} {
+		if inline, ok := payload[key].(string); ok {
+			valuesPayload[key] = inline
 		}
+	}
+	if err := recordSealValues(sealCtx, s.store, ownerID, artifactID, valuesPayload); err != nil {
+		return failWith("values", err, written)
 	}
 
 	if err := sealCtx.Err(); err != nil {

@@ -359,7 +359,30 @@ first draft of this document:
 - `sealFault` is an unexported in-package test seam for injecting a failure at
   a named finalization stage; production code never sets it.
 
-## 11. Decisions
+## 11. Post-review remediation
+
+The PR's automated review raised correctness gaps; the implementation now:
+
+- verifies a caller-supplied `TranscriptID` against the sealing owner/scope and
+  digest **before** writing the artifact, rejecting foreign/corrupt IDs with
+  `ErrSealTranscriptInvalid`;
+- reads transcript facts directly by record id, so seal latency does not grow
+  with the number of transcripts in the store;
+- never deletes a transcript blob on artifact discard — an attempt's transcript
+  can be cited by a retry, a resealed child, or another artifact;
+- compares both revision and git `tree_sha` for staleness, catching uncommitted
+  worktree edits that leave HEAD unchanged;
+- leaves workspace state absent when no state-values fact was written, instead
+  of substituting a later sandbox capture, and refuses to fork such a handle;
+- records inline diff/metadata/snapshot values in `seal.values.v1`, so a
+  `sealed_append` failure no longer loses small values;
+- registers a live `FailedSeal` handle on failure, resolves earlier artifacts on
+  a direct retry of the same scope, and refuses to fork from a sandbox-less
+  parent that would silently drop the artifact baseline;
+- skips the duplicate snapshot write when `TranscriptID` is set, and preserves
+  `SealContext` when combined with explicit finalization mode/timeout.
+
+## 12. Decisions
 
 Resolved with the bead owner:
 

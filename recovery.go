@@ -307,6 +307,7 @@ func RecoverScopes(store *trace.SQLiteTraceStore, opts RecoverOptions) (*ScopeMa
 		}
 		roots++
 	}
+	sharedChildren := make([]*Scope, 0)
 	for _, scope := range all {
 		if isChild := func() bool {
 			scope.mu.Lock()
@@ -332,13 +333,28 @@ func RecoverScopes(store *trace.SQLiteTraceStore, opts RecoverOptions) (*ScopeMa
 			}
 			continue
 		}
-		// A shared child inherits its parent's re-adopted sandbox, exactly
-		// as it inherited the parent's at fork time; there is nothing to
-		// resolve for it.
-		if parent := scope.Parent(); parent != nil {
-			scope.mu.Lock()
-			scope.sandbox = parent.Sandbox()
-			scope.mu.Unlock()
+		sharedChildren = append(sharedChildren, scope)
+	}
+	// Inheritance must be parent-before-child: a shared grandchild can be
+	// visited before its parent in the unordered registry, so keep passing
+	// until no further sandbox can be inherited. Failed-seal handles read
+	// Adopted/staleness from these sandboxes and must see the settled tree.
+	for len(sharedChildren) > 0 {
+		progressed := false
+		remaining := sharedChildren[:0]
+		for _, scope := range sharedChildren {
+			if parent := scope.Parent(); parent != nil && parent.Sandbox() != nil {
+				scope.mu.Lock()
+				scope.sandbox = parent.Sandbox()
+				scope.mu.Unlock()
+				progressed = true
+				continue
+			}
+			remaining = append(remaining, scope)
+		}
+		sharedChildren = remaining
+		if !progressed {
+			break
 		}
 	}
 

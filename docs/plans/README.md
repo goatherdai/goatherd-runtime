@@ -265,10 +265,11 @@ boundary means it cannot govern every file effect.
 ## Design notes
 
 - **Failed-seal recovery** (bead `shepherd-runtime-go-mtf`, cross-repo tracker
-  `yaah-9nqf`): proposed durable failed-seal artifacts, a bounded finalization
-  phase, and recovery handles that can seed a fresh dispatch —
+  `yaah-9nqf`): durable failed-seal artifacts, a bounded finalization phase,
+  and recovery handles that can seed a fresh dispatch —
   [`../designs/failed-seal-recovery.md`](../designs/failed-seal-recovery.md).
-  Not implemented; sign-off on the finalization-semantics decision is pending.
+  Runtime implemented and decisions resolved; the yaah integration
+  (`yaah-9nqf`) is still pending.
 
 ## Gap inventory → plan
 

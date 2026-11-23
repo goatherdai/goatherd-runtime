@@ -244,8 +244,8 @@ func TestFailedSeal_RetainsArtifactTranscriptAndIsRecoverable(t *testing.T) {
 	if h.Workspace.Backend != "git" || len(h.Changes) != 1 || h.Changes[0].Path != "result.txt" {
 		t.Errorf("handle workspace/changes = %+v / %+v", h.Workspace, h.Changes)
 	}
-	if !containsString(h.Values, sealBlobDiff) || h.Diff == "" {
-		t.Errorf("handle values/diff = %v / %d bytes", h.Values, len(h.Diff))
+	if !containsString(h.Values, "diff") || !containsString(h.Blobs, sealBlobDiff) || h.Diff == "" {
+		t.Errorf("handle values/blobs/diff = %v / %v / %d bytes", h.Values, h.Blobs, len(h.Diff))
 	}
 	if len(recovered.FailedSeals()) != 1 {
 		t.Fatalf("FailedSeals() = %d handles, want 1", len(recovered.FailedSeals()))
@@ -268,10 +268,16 @@ func TestFailedSeal_RetainsArtifactTranscriptAndIsRecoverable(t *testing.T) {
 	if seeded.DerivedFrom() != h.ArtifactID {
 		t.Errorf("seeded derivedFrom = %q, want %q", seeded.DerivedFrom(), h.ArtifactID)
 	}
+	// The transcript fact is scope-scoped: the reseeded child needs its own
+	// journal before it can seal with TranscriptID.
+	reseedTranscriptID, err := recovered.PersistAttemptTranscript(ctx, "attempt-reseed", seeded.ID(), transcript)
+	if err != nil {
+		t.Fatalf("PersistAttemptTranscript for reseed: %v", err)
+	}
 	// The reseed must seal with the fault cleared: a retry is the recovery
 	// path, not another failure.
 	sealFault = nil
-	sealedOut, err := recovered.Seal(ctx, seeded.ID(), SealOptions{TranscriptID: transcriptID})
+	sealedOut, err := recovered.Seal(ctx, seeded.ID(), SealOptions{TranscriptID: reseedTranscriptID})
 	if err != nil {
 		t.Fatalf("Seal of reseeded child: %v", err)
 	}
@@ -323,8 +329,10 @@ func TestDiscardFailedSeal_RemovesHandleAndBlobs(t *testing.T) {
 	if _, _, err := trace.GetBlob(ctx, store, "seal-discard-child", sealBlobDiff, h.OutputID); !errors.Is(err, trace.ErrBlobNotFound) {
 		t.Errorf("diff blob after discard: %v, want ErrBlobNotFound", err)
 	}
-	if _, _, err := trace.GetBlob(ctx, store, "seal-discard-child", transcriptBlob, h.AttemptID); !errors.Is(err, trace.ErrBlobNotFound) {
-		t.Errorf("transcript blob after discard: %v, want ErrBlobNotFound", err)
+	// The transcript belongs to the attempt, not this artifact: discarding
+	// one failed seal must not delete a blob another record can cite.
+	if data, _, err := trace.GetBlob(ctx, store, "seal-discard-child", transcriptBlob, h.AttemptID); err != nil || len(data) == 0 {
+		t.Errorf("transcript blob after discard = %d bytes, err %v; want it preserved", len(data), err)
 	}
 }
 
@@ -358,5 +366,231 @@ func TestRecover_InterruptedArtifactAndInvalidTranscript(t *testing.T) {
 	}
 	if _, err := recovered.ForkFromFailedSeal(ctx, "scope:interrupted-root", "should-not-exist", h, nil); err == nil {
 		t.Fatal("ForkFromFailedSeal accepted an invalid transcript")
+	}
+}
+
+func TestSeal_RejectsTranscriptFromAnotherScope(t *testing.T) {
+	ctx := context.Background()
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	repo := newTestRepo(t)
+	parent, _ := mgr.Create("transcript-scope-root", git.NewLocalGitSandbox(repo))
+	source, _ := forkWorktreeChild(t, mgr, parent.ID(), "transcript-source", repo, "source")
+	target, _ := forkWorktreeChild(t, mgr, parent.ID(), "transcript-target", repo, "target")
+	transcriptID, err := mgr.PersistAttemptTranscript(ctx, "attempt-source", source.ID(), []byte("conversation"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = mgr.Seal(ctx, target.ID(), SealOptions{TranscriptID: transcriptID, AttemptID: "attempt-target"})
+	if !errors.Is(err, ErrSealTranscriptInvalid) {
+		t.Fatalf("Seal with a foreign transcript = %v, want ErrSealTranscriptInvalid", err)
+	}
+	artifacts, err := trace.ScanRecordsBySchema(ctx, store, SchemaSealArtifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(artifacts) != 0 {
+		t.Fatalf("invalid transcript wrote %d artifacts, want 0", len(artifacts))
+	}
+}
+
+func TestSeal_InlineValuesSurviveFailedAppend(t *testing.T) {
+	ctx := context.Background()
+	injectSealFault(t, "sealed_append")
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	repo := newTestRepo(t)
+	parent, _ := mgr.Create("inline-root", git.NewLocalGitSandbox(repo))
+	child, wtPath := forkWorktreeChild(t, mgr, parent.ID(), "inline-child", repo, "child")
+	if err := os.WriteFile(filepath.Join(wtPath, "small.txt"), []byte("small diff"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := mgr.Seal(ctx, child.ID(), SealOptions{Metadata: []byte("inline metadata")})
+	var sealErr *SealError
+	if !errors.As(err, &sealErr) {
+		t.Fatalf("Seal error = %v, want *SealError", err)
+	}
+	recovered, err := RecoverScopes(store, RecoverOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, ok := recovered.FailedSeal(sealErr.ArtifactID)
+	if !ok {
+		t.Fatal("no live handle")
+	}
+	if h.Diff == "" || string(h.Metadata) != "inline metadata" {
+		t.Errorf("handle diff/metadata = %q / %q; want inline values", h.Diff, h.Metadata)
+	}
+	if !containsString(h.Values, "diff") || !containsString(h.Values, "metadata") || len(h.Blobs) != 0 {
+		t.Errorf("handle values/blobs = %v / %v", h.Values, h.Blobs)
+	}
+}
+
+func TestSealFailedSeal_RegistersLiveHandle(t *testing.T) {
+	ctx := context.Background()
+	injectSealFault(t, "sealed_append")
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	repo := newTestRepo(t)
+	parent, _ := mgr.Create("live-handle-root", git.NewLocalGitSandbox(repo))
+	child, wtPath := forkWorktreeChild(t, mgr, parent.ID(), "live-handle-child", repo, "child")
+	if err := os.WriteFile(filepath.Join(wtPath, "result.txt"), []byte("winner"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := mgr.Seal(ctx, child.ID())
+	var sealErr *SealError
+	if !errors.As(err, &sealErr) {
+		t.Fatalf("Seal error = %v, want *SealError", err)
+	}
+	h, ok := mgr.FailedSeal(sealErr.ArtifactID)
+	if !ok || h.Stage != "sealed_append" || !h.Adopted {
+		t.Fatalf("live handle = %+v, ok %v; want an adopted sealed_append handle", h, ok)
+	}
+	if len(mgr.FailedSeals()) != 1 {
+		t.Fatalf("FailedSeals() = %d, want 1 without a restart", len(mgr.FailedSeals()))
+	}
+}
+
+func TestPersistAttemptTranscript_EmptyIsValid(t *testing.T) {
+	ctx := context.Background()
+	mgr := NewScopeManager(newMemStore(t))
+	if _, err := mgr.PersistAttemptTranscript(ctx, "attempt-empty", "scope:empty", nil); err != nil {
+		t.Fatalf("PersistAttemptTranscript(empty): %v", err)
+	}
+	records, err := trace.ScanRecordsBySchema(ctx, mgr.store, SchemaAttemptTranscript)
+	if err != nil || len(records) != 1 {
+		t.Fatalf("transcript facts = %d, err %v", len(records), err)
+	}
+	data, valid := readTranscript(ctx, mgr.store, records[0].OwnerID, records[0].Payload)
+	if !valid || len(data) != 0 {
+		t.Fatalf("empty transcript = %q, valid %v; want empty and valid", data, valid)
+	}
+}
+
+func TestForkFromFailedSeal_RefusesBareParent(t *testing.T) {
+	ctx := context.Background()
+	mgr := NewScopeManager(newMemStore(t))
+	if _, err := mgr.Create("bare-parent", nil); err != nil {
+		t.Fatal(err)
+	}
+	h := &FailedSeal{
+		ArtifactID: "art:bare:1",
+		Workspace:  trace.WorkspaceState{Backend: "git", Revision: "abc"},
+		Transcript: []byte("conversation"),
+	}
+	if _, err := mgr.ForkFromFailedSeal(ctx, "scope:bare-parent", "child", h, nil); err == nil {
+		t.Fatal("ForkFromFailedSeal accepted a parent without a sandbox")
+	}
+}
+
+func TestRecover_FailedHandleStaleAfterUncommittedEdit(t *testing.T) {
+	ctx := context.Background()
+	injectSealFault(t, "sealed_append")
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	repo := newTestRepo(t)
+	parent, _ := mgr.Create("stale-root", git.NewLocalGitSandbox(repo))
+	child, wtPath := forkWorktreeChild(t, mgr, parent.ID(), "stale-child", repo, "child")
+	if err := os.WriteFile(filepath.Join(wtPath, "result.txt"), []byte(strings.Repeat("x", sealInlineLimit+64)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Seal(ctx, child.ID()); err == nil {
+		t.Fatal("injected seal failure did not occur")
+	}
+	// HEAD has not moved, but the worktree contents have.
+	if err := os.WriteFile(filepath.Join(wtPath, "result.txt"), []byte("edited after the artifact"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := RecoverScopes(store, RecoverOptions{Resolver: func(scopeID, backend, path string) (sandbox.Sandbox, error) {
+		if path == "" {
+			return git.NewLocalGitSandbox(repo), nil
+		}
+		return git.NewWorktreeSandbox(repo, path), nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handles := recovered.FailedSeals()
+	if len(handles) != 1 || !handles[0].Stale {
+		t.Fatalf("failed handles = %+v, want one stale handle", handles)
+	}
+}
+
+func TestSeal_DirectRetryResolvesEarlierArtifact(t *testing.T) {
+	ctx := context.Background()
+	injectSealFault(t, "sealed_append")
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	repo := newTestRepo(t)
+	parent, _ := mgr.Create("retry-root", git.NewLocalGitSandbox(repo))
+	child, wtPath := forkWorktreeChild(t, mgr, parent.ID(), "retry-child", repo, "child")
+	if err := os.WriteFile(filepath.Join(wtPath, "result.txt"), []byte("winner"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mgr.Seal(ctx, child.ID()); err == nil {
+		t.Fatal("injected seal failure did not occur")
+	}
+	sealFault = nil
+	if _, err := mgr.Seal(ctx, child.ID()); err != nil {
+		t.Fatalf("direct retry seal: %v", err)
+	}
+	recovered, err := RecoverScopes(store, RecoverOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handles := recovered.FailedSeals(); len(handles) != 0 {
+		t.Fatalf("failed handles after direct retry = %+v, want none", handles)
+	}
+}
+
+func TestSeal_TranscriptCitedWithoutDuplicateSnapshot(t *testing.T) {
+	ctx := context.Background()
+	store := newMemStore(t)
+	mgr := NewScopeManager(store)
+	repo := newTestRepo(t)
+	parent, _ := mgr.Create("nodup-root", git.NewLocalGitSandbox(repo))
+	child, wtPath := forkWorktreeChild(t, mgr, parent.ID(), "nodup-child", repo, "child")
+	if err := os.WriteFile(filepath.Join(wtPath, "result.txt"), []byte("winner"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	transcript := []byte(strings.Repeat("T", sealInlineLimit+64))
+	transcriptID, err := mgr.PersistAttemptTranscript(ctx, "attempt-nodup", child.ID(), transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := mgr.Seal(ctx, child.ID(), SealOptions{TranscriptID: transcriptID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(out.Snapshot()) != string(transcript) {
+		t.Fatal("live Snapshot() did not report the journaled transcript")
+	}
+	sealed, err := trace.ScanRecordsBySchema(ctx, store, SchemaRunOutputSealed)
+	if err != nil || len(sealed) != 1 {
+		t.Fatalf("sealed facts = %d, err %v", len(sealed), err)
+	}
+	for _, key := range []string{"snapshot", "snapshot_digest"} {
+		if _, ok := sealed[0].Payload[key]; ok {
+			t.Errorf("sealed payload has duplicate %q", key)
+		}
+	}
+}
+
+func TestSeal_SealContextPreservedWithExplicitMode(t *testing.T) {
+	ctx := context.Background()
+	mgr := NewScopeManager(newMemStore(t))
+	repo := newTestRepo(t)
+	parent, _ := mgr.Create("alias-root", git.NewLocalGitSandbox(repo))
+	child, wtPath := forkWorktreeChild(t, mgr, parent.ID(), "alias-child", repo, "child")
+	if err := os.WriteFile(filepath.Join(wtPath, "result.txt"), []byte("winner"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	expired, cancel := context.WithDeadline(ctx, time.Now().Add(-time.Second))
+	defer cancel()
+	if _, err := mgr.Seal(expired, child.ID(), SealOptions{
+		SealContext:  context.Background(),
+		Finalization: FinalizationOptions{Mode: FinalizationDetached, Timeout: 5 * time.Second},
+	}); err != nil {
+		t.Fatalf("SealContext with explicit finalization mode: %v", err)
 	}
 }

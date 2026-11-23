@@ -2,6 +2,7 @@ package goatherd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	trace "github.com/goatherdai/goatherd-kernel"
 	sandbox "github.com/goatherdai/goatherd-runtime/sandbox"
@@ -346,6 +347,15 @@ func (m *ScopeManager) Seal(ctx context.Context, scopeID string, opts ...SealOpt
 
 	out, err := scope.Seal(ctx, opt)
 	if err != nil {
+		// A typed failure with an artifact is a live recovery handle, not
+		// just an error string: register it so the host can inspect, discard
+		// or fork it without waiting for a restart.
+		var sealErr *SealError
+		if errors.As(err, &sealErr) && sealErr.Handle != nil {
+			m.mu.Lock()
+			m.failedSeals[sealErr.ArtifactID] = sealErr.Handle
+			m.mu.Unlock()
+		}
 		return nil, err
 	}
 
@@ -366,6 +376,13 @@ func (m *ScopeManager) Seal(ctx context.Context, scopeID string, opts ...SealOpt
 	// recovery of the failed work too.
 	if out.DerivedFrom() != "" {
 		delete(m.failedSeals, out.DerivedFrom())
+	}
+	// A direct retry of the same scope gets a fresh artifact id; any
+	// earlier artifact of that scope is superseded by this sealed output.
+	for id, h := range m.failedSeals {
+		if h.ScopeID == out.ScopeID() && h.CreatedAt > 0 && h.CreatedAt <= out.sealedAt.UnixNano() {
+			delete(m.failedSeals, id)
+		}
 	}
 	m.mu.Unlock()
 

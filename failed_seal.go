@@ -84,6 +84,9 @@ type SealError struct {
 	Stage      string
 	ArtifactID string
 	Err        error
+	// Handle is the live recovery handle when an artifact was written. A
+	// host can surface or fork it without waiting for a restart.
+	Handle *FailedSeal
 }
 
 func (e *SealError) Error() string {
@@ -149,20 +152,24 @@ func finalize(ctx context.Context, opt FinalizationOptions) (context.Context, co
 // not complete. A surfaced handle always has a digest-verified transcript;
 // that is the guarantee the transcript journal exists to provide.
 type FailedSeal struct {
-	ID                string
-	ArtifactID        string
-	OutputID          string
-	ScopeID           string
-	OwnerID           string
-	AttemptID         string
-	TranscriptID      string
-	Transcript        []byte
-	Workspace         trace.WorkspaceState
-	Baseline          trace.WorkspaceState
-	Changes           []ProposedChange
-	Diff              string
-	Metadata          []byte
-	Values            []string
+	ID           string
+	ArtifactID   string
+	OutputID     string
+	ScopeID      string
+	OwnerID      string
+	AttemptID    string
+	TranscriptID string
+	Transcript   []byte
+	Workspace    trace.WorkspaceState
+	Baseline     trace.WorkspaceState
+	Changes      []ProposedChange
+	Diff         string
+	Metadata     []byte
+	// Values names every value present in the artifact (inline or blob).
+	Values []string
+	// Blobs names the values that are named blobs keyed by OutputID.
+	Blobs             []string
+	CreatedAt         int64
 	Stage             string
 	Reason            string
 	Adopted           bool
@@ -260,7 +267,9 @@ func readTranscript(ctx context.Context, store *trace.SQLiteTraceStore, ownerID 
 			return nil, false
 		}
 		data = got
-	} else if encoded, _ := payload["transcript"].(string); encoded != "" {
+	} else if encoded, present := payload["transcript"].(string); present {
+		// An empty transcript is a value, not a missing field: base64 of
+		// zero bytes is the empty string and still has a valid digest.
 		decoded, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
 			slog.Warn("recovery: decode attempt transcript failed", "owner", ownerID, "err", err)
@@ -276,10 +285,47 @@ func readTranscript(ctx context.Context, store *trace.SQLiteTraceStore, ownerID 
 	return data, true
 }
 
+// readTranscriptFact reads one transcript fact by record id, without scanning
+// the store. Seal and recovery both use it so seal latency is independent of
+// how many transcripts the trace holds.
+func readTranscriptFact(ctx context.Context, store *trace.SQLiteTraceStore, transcriptID string) (string, map[string]any, error) {
+	if transcriptID == "" {
+		return "", nil, errors.New("empty transcript id")
+	}
+	rec, err := store.ReadFact(ctx, trace.TrustedReadContext, transcriptID)
+	if err != nil {
+		return "", nil, err
+	}
+	fact, ok := rec.(trace.Record)
+	if !ok || fact.Envelope.SchemaRef != SchemaAttemptTranscript || fact.View == nil {
+		return "", nil, fmt.Errorf("transcript %s is not an attempt transcript", transcriptID)
+	}
+	return fact.View.TraceOwnerID, fact.Body.Payload, nil
+}
+
+// verifyTranscriptRef resolves a caller-supplied transcript ID and checks it
+// belongs to the sealing scope. A foreign, missing or corrupt ID is rejected
+// before the artifact is written, so no fact ever cites an unusable
+// conversation.
+func verifyTranscriptRef(ctx context.Context, store *trace.SQLiteTraceStore, ownerID, scopeID, transcriptID string) ([]byte, error) {
+	owner, payload, err := readTranscriptFact(ctx, store, transcriptID)
+	if err != nil {
+		return nil, fmt.Errorf("%w: read transcript %s: %v", ErrSealTranscriptInvalid, transcriptID, err)
+	}
+	if owner != ownerID || strPayload(payload["scope"]) != scopeID {
+		return nil, fmt.Errorf("%w: transcript %s belongs to a different scope", ErrSealTranscriptInvalid, transcriptID)
+	}
+	data, ok := readTranscript(ctx, store, owner, payload)
+	if !ok {
+		return nil, fmt.Errorf("%w: transcript %s failed digest verification", ErrSealTranscriptInvalid, transcriptID)
+	}
+	return data, nil
+}
+
 // recordSealFailed appends the terminal failure fact. It detaches from the
 // context that just failed so the failure is still recorded when the seal's
 // finalization context expired.
-func recordSealFailed(ctx context.Context, store *trace.SQLiteTraceStore, ownerID, artifactID, stage, reason string, values []string) {
+func recordSealFailed(ctx context.Context, store *trace.SQLiteTraceStore, ownerID, artifactID, stage, reason string, values, blobs []string) {
 	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), DefaultFailureRecordTimeout)
 	defer cancel()
 	payload := map[string]any{
@@ -289,6 +335,9 @@ func recordSealFailed(ctx context.Context, store *trace.SQLiteTraceStore, ownerI
 	}
 	if len(values) > 0 {
 		payload["values"] = values
+	}
+	if len(blobs) > 0 {
+		payload["blobs"] = blobs
 	}
 	_, err := store.Append(fctx, trace.TrustedAppendContext, trace.AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:seal-failed:%s:%d", ownerID, artifactID, nextCheckpointSeq.Add(1)),
@@ -437,8 +486,10 @@ func (m *ScopeManager) DiscardFailedSeal(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("discard failed-seal artifact %s: %w", h.ArtifactID, err)
 	}
+	// The transcript belongs to the attempt, not to this artifact: a retry,
+	// a resealed child, or another artifact can cite the same fact. Its blob
+	// is left to reference-aware retention, never removed here.
 	for _, b := range []struct{ kind, key string }{
-		{transcriptBlob, h.AttemptID},
 		{sealBlobDiff, h.OutputID},
 		{sealBlobMetadata, h.OutputID},
 		{sealBlobSnapshot, h.OutputID},
@@ -459,11 +510,22 @@ func (m *ScopeManager) DiscardFailedSeal(ctx context.Context, id string) error {
 // ForkFromFailedSeal seeds a fresh isolated child from a failed-seal artifact:
 // the artifact's baseline becomes the child's baseline, its workspace state
 // the seed, and its verified transcript the fork snapshot. The child carries
-// the artifact id as derived_from lineage. Stale, unadopted, or
-// transcript-invalid handles are refused — never silently reseeded.
+// the artifact id as derived_from lineage. Stale or transcript-invalid handles
+// are refused. An unadopted handle is allowed — the container lane has no
+// worktree to re-adopt and seeds from captured state — but its drift was not
+// verified; hosts that require a live worktree must check Adopted themselves.
+// A parent without a sandbox is refused: the fork path would otherwise drop
+// the artifact's explicit baseline and produce a child that cannot seal.
 func (m *ScopeManager) ForkFromFailedSeal(ctx context.Context, parentID, childOwnerID string, h *FailedSeal, sb sandbox.Sandbox) (*Scope, error) {
 	if h == nil {
 		return nil, errors.New("fork from failed seal: a handle is required")
+	}
+	parent, ok := m.Get(parentID)
+	if !ok {
+		return nil, fmt.Errorf("fork from failed seal %s: parent scope %s not found", h.ArtifactID, parentID)
+	}
+	if parent.Sandbox() == nil {
+		return nil, fmt.Errorf("fork from failed seal %s: parent %s has no sandbox to carry the artifact baseline", h.ArtifactID, parentID)
 	}
 	if sb == nil {
 		return nil, fmt.Errorf("fork from failed seal %s: an isolated sandbox is required", h.ArtifactID)
@@ -549,7 +611,12 @@ func recoverFailedSeals(ctx context.Context, mgr *ScopeManager, store *trace.SQL
 		byTranscriptID[rec.RecordID] = transcriptEntry{owner: rec.OwnerID, payload: rec.Payload}
 		transcriptCount++
 	}
+	type sealedMark struct {
+		scope    string
+		sealedAt int64
+	}
 	resolved := make(map[string]bool, len(sealed))
+	sealedByScope := make(map[string][]sealedMark, len(sealed))
 	for _, rec := range sealed {
 		if id, _ := rec.Payload["artifact_id"].(string); id != "" {
 			resolved[id] = true
@@ -558,6 +625,11 @@ func recoverFailedSeals(ctx context.Context, mgr *ScopeManager, store *trace.SQL
 		// derived_from; it resolves the source just as a direct retry does.
 		if id, _ := rec.Payload["derived_from"].(string); id != "" {
 			resolved[id] = true
+		}
+		scope, _ := rec.Payload["scope"].(string)
+		at, _ := payloadInt(rec.Payload["sealed_at"])
+		if scope != "" && at > 0 {
+			sealedByScope[scope] = append(sealedByScope[scope], sealedMark{scope: scope, sealedAt: int64(at)})
 		}
 	}
 	discarded := make(map[string]bool, len(discards))
@@ -587,6 +659,21 @@ func recoverFailedSeals(ctx context.Context, mgr *ScopeManager, store *trace.SQL
 		if artifactID == "" || resolved[artifactID] || discarded[artifactID] {
 			continue
 		}
+		createdAt, _ := payloadInt(rec.Payload["created_at"])
+		if scope, _ := rec.Payload["scope"].(string); scope != "" && createdAt > 0 {
+			// A direct retry of the same scope gets a fresh artifact id, so
+			// id pairing alone cannot resolve this one. A later successful
+			// seal of the same scope supersedes the earlier artifact.
+			for _, mark := range sealedByScope[scope] {
+				if mark.sealedAt >= int64(createdAt) {
+					resolved[artifactID] = true
+					break
+				}
+			}
+		}
+		if resolved[artifactID] {
+			continue
+		}
 		ownerID, _ := rec.Payload["owner"].(string)
 		if ownerID == "" {
 			ownerID = rec.OwnerID
@@ -603,6 +690,7 @@ func recoverFailedSeals(ctx context.Context, mgr *ScopeManager, store *trace.SQL
 			OwnerID:      ownerID,
 			AttemptID:    strPayload(rec.Payload["attempt_id"]),
 			TranscriptID: strPayload(rec.Payload["transcript_id"]),
+			CreatedAt:    int64(createdAt),
 		}
 		if entry, ok := byTranscriptID[h.TranscriptID]; ok {
 			data, valid := readTranscript(ctx, store, entry.owner, entry.payload)
@@ -636,12 +724,34 @@ func recoverFailedSeals(ctx context.Context, mgr *ScopeManager, store *trace.SQL
 					})
 				}
 			}
+			// Inline values live only in the values record, not in a blob.
 			if text, ok := v["diff"].(string); ok {
 				h.Diff = text
+			}
+			if encoded, ok := v["metadata"].(string); ok {
+				if data, decErr := base64.StdEncoding.DecodeString(encoded); decErr == nil {
+					h.Metadata = data
+				} else {
+					slog.Warn("recovery: decode failed-seal inline metadata failed", "artifact", artifactID, "err", decErr)
+				}
+			}
+			if encoded, ok := v["snapshot"].(string); ok && len(h.Transcript) == 0 {
+				if data, decErr := base64.StdEncoding.DecodeString(encoded); decErr == nil {
+					// Legacy artifact without a transcript journal.
+					h.Transcript = data
+					h.TranscriptInvalid = false
+				} else {
+					slog.Warn("recovery: decode failed-seal inline snapshot failed", "artifact", artifactID, "err", decErr)
+				}
 			}
 			for _, name := range payloadStrings(v["values"]) {
 				if !containsString(h.Values, name) {
 					h.Values = append(h.Values, name)
+				}
+			}
+			for _, kind := range payloadStrings(v["blobs"]) {
+				if !containsString(h.Blobs, kind) {
+					h.Blobs = append(h.Blobs, kind)
 				}
 			}
 		}
@@ -653,14 +763,19 @@ func recoverFailedSeals(ctx context.Context, mgr *ScopeManager, store *trace.SQL
 					h.Values = append(h.Values, name)
 				}
 			}
+			for _, kind := range payloadStrings(fr["blobs"]) {
+				if !containsString(h.Blobs, kind) {
+					h.Blobs = append(h.Blobs, kind)
+				}
+			}
 		} else {
 			h.Stage = "interrupted"
 			h.Reason = "seal artifact has no terminal record"
 			interruptedCount++
 		}
-		// Blob bytes are keyed by artifact id and named by the values list;
-		// read them directly so a values-record failure cannot hide them.
-		if containsString(h.Values, sealBlobDiff) {
+		// Blobs are keyed by the reserved output id; only the names in the
+		// blobs list are blob-backed — inline values stay in the values fact.
+		if containsString(h.Blobs, sealBlobDiff) {
 			if data, _, getErr := trace.GetBlob(ctx, store, ownerID, sealBlobDiff, h.OutputID); getErr == nil {
 				h.Diff = string(data)
 			} else {
@@ -668,7 +783,7 @@ func recoverFailedSeals(ctx context.Context, mgr *ScopeManager, store *trace.SQL
 			}
 		}
 		for _, kind := range []string{sealBlobMetadata, sealBlobSnapshot} {
-			if !containsString(h.Values, kind) {
+			if !containsString(h.Blobs, kind) {
 				continue
 			}
 			if data, _, getErr := trace.GetBlob(ctx, store, ownerID, kind, h.OutputID); getErr == nil {
@@ -690,16 +805,17 @@ func recoverFailedSeals(ctx context.Context, mgr *ScopeManager, store *trace.SQL
 		if scope, ok := mgr.Get(scopeID); ok {
 			if sb := scope.Sandbox(); sb != nil {
 				h.Adopted = true
-				if captured, capErr := sb.Capture(ctx); capErr == nil {
-					// Revision, not full digest: staleness means the
-					// workspace timeline moved after the artifact, the
-					// same rule checkpoints use on recovery. Non-position
-					// data in a re-adopted sandbox is not drift.
-					recordedRevision := h.Workspace.Revision
-					if !hasState {
-						h.Workspace = captured
+				if captured, capErr := sb.Capture(ctx); capErr == nil && hasState {
+					// A missing state-values fact is never replaced by a
+					// later capture: that would invent seal-time state.
+					// Drift means either the timeline moved or the content
+					// tree changed (uncommitted edits do not move HEAD).
+					recordedTree, _ := h.Workspace.Data["tree_sha"].(string)
+					currentTree, _ := captured.Data["tree_sha"].(string)
+					if h.Workspace.Revision != "" && captured.Revision != h.Workspace.Revision {
+						h.Stale = true
 					}
-					if recordedRevision != "" && captured.Revision != recordedRevision {
+					if recordedTree != "" && currentTree != "" && recordedTree != currentTree {
 						h.Stale = true
 					}
 				}
@@ -725,21 +841,17 @@ func loadTranscript(ctx context.Context, store *trace.SQLiteTraceStore, ownerID,
 	if transcriptID == "" {
 		return nil
 	}
-	records, err := trace.ScanRecordsBySchema(ctx, store, SchemaAttemptTranscript)
+	owner, payload, err := readTranscriptFact(ctx, store, transcriptID)
 	if err != nil {
-		slog.Warn("seal: scan attempt transcripts failed", "owner", ownerID, "err", err)
+		slog.Warn("seal: read cited transcript failed", "transcript", transcriptID, "err", err)
 		return nil
 	}
-	for _, rec := range records {
-		if rec.RecordID == transcriptID {
-			data, ok := readTranscript(ctx, store, rec.OwnerID, rec.Payload)
-			if !ok {
-				slog.Warn("seal: cited transcript failed verification", "transcript", transcriptID)
-			}
-			return data
-		}
+	data, ok := readTranscript(ctx, store, owner, payload)
+	if !ok {
+		slog.Warn("seal: cited transcript failed verification", "transcript", transcriptID)
+		return nil
 	}
-	return nil
+	return data
 }
 
 // recoverOutputTranscripts restores Snapshot() on outputs whose seal cited a
