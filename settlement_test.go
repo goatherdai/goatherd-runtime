@@ -97,6 +97,66 @@ func TestSeal_FreezesChanges(t *testing.T) {
 	}
 }
 
+// TestSeal_LiveFinalizationContext pins the PR #369 handoff: Seal must be able
+// to finalize under a live context even when its ctx argument carries an
+// already-elapsed attempt deadline. SealOptions.SealContext is that live
+// finalization context; when set, it — not the expired argument — drives the
+// durable seal work, so cancellation flows through it.
+func TestSeal_LiveFinalizationContext(t *testing.T) {
+	mgr := NewScopeManager(newMemStore(t))
+	repo := newTestRepo(t)
+	parent, _ := mgr.Create("set:sealctx-parent", git.NewLocalGitSandbox(repo))
+
+	child, wtPath := forkWorktreeChild(t, mgr, parent.ID(), "set:sealctx-child", repo, "wt")
+	if err := os.WriteFile(filepath.Join(wtPath, "result.txt"), []byte("winner"), 0o644); err != nil {
+		t.Fatalf("write result: %v", err)
+	}
+
+	// An attempt deadline that has already elapsed.
+	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	// Without a live finalization context the expired ctx must fail the seal.
+	if _, err := mgr.Seal(expired, child.ID()); err == nil {
+		t.Fatal("Seal with an expired ctx and no SealContext should fail")
+	}
+
+	// The failed seal must not have consumed the scope: a second seal with a
+	// live SealContext succeeds despite the same expired ctx argument.
+	out, err := mgr.Seal(expired, child.ID(), SealOptions{SealContext: context.Background()})
+	if err != nil {
+		t.Fatalf("Seal with a live SealContext: %v", err)
+	}
+	if out.ScopeID() != child.ID() {
+		t.Errorf("output scope = %q, want %q", out.ScopeID(), child.ID())
+	}
+	if got := len(out.Changes()); got != 1 {
+		t.Fatalf("changes = %d, want 1", got)
+	}
+	if c := out.Changes()[0]; c.Path != "result.txt" || c.Kind != ChangeCreate {
+		t.Errorf("change = %+v, want one create of result.txt", c)
+	}
+}
+
+// TestSealCleanupContext_Detached pins the Qodo follow-up on PR #3: blob
+// cleanup after a failed seal must not inherit the seal context's cancellation
+// (cancellation is often why the seal failed) but must still carry its own
+// bounded deadline.
+func TestSealCleanupContext_Detached(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	cancel() // the seal context of a failed seal is already canceled
+
+	cleanupCtx, cleanupCancel := newSealCleanupContext(parent)
+	defer cleanupCancel()
+
+	if err := cleanupCtx.Err(); err != nil {
+		t.Fatalf("cleanup context inherited cancellation from seal ctx: %v", err)
+	}
+	if dl, ok := cleanupCtx.Deadline(); !ok || dl.IsZero() {
+		t.Fatal("cleanup context should carry its own bounded deadline")
+	}
+}
+
 // TestSettle_SelectOnUnmovedParent covers the select verb end to end:
 // fast-forward-only (strict digest equality), physical propagation, causal
 // merge, worktree teardown, consume-once.
