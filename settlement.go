@@ -78,6 +78,17 @@ type SealOptions struct {
 	// output's SupersededBy() reports this output after the seal: live when
 	// sealed through ScopeManager.Seal, or rebuilt on recovery.
 	Supersedes string
+	// SealContext is the finalization context Seal uses for its durable work:
+	// the sandbox capture, the delta annotation, the diff, and the trace/blob
+	// writes. When nil, Seal uses its ctx argument.
+	//
+	// Set it when the ctx argument carries a deadline that has already
+	// elapsed — an attempt deadline consumed by the run body, for example —
+	// but the caller still wants to seal. SealContext must be live and remain
+	// cancellable with the caller: derive it from a still-live parent, not
+	// from the expired attempt context. When SealContext is set, cancellation
+	// flows through it rather than through the ctx argument.
+	SealContext context.Context
 }
 
 // sealBlobRef names a blob written for an output, so a failed seal can remove
@@ -362,6 +373,18 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 		return nil, err
 	}
 
+	// The finalization context is the seal's execution context: the sandbox
+	// capture, delta annotation, diff, and every durable write. It defaults
+	// to the ctx argument. A caller whose ctx carries an already-elapsed
+	// deadline (an attempt deadline the run body consumed) supplies a live
+	// SealContext instead — one derived from a still-live parent, so the seal
+	// stays cancellable with the caller without inheriting the expired
+	// deadline.
+	sealCtx := ctx
+	if opt.SealContext != nil {
+		sealCtx = opt.SealContext
+	}
+
 	s.mu.RLock()
 	state := s.state
 	sb := s.sandbox
@@ -384,7 +407,7 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 		derivedFrom = opt.DerivedFrom
 	}
 
-	ws, err := sb.Capture(ctx)
+	ws, err := sb.Capture(sealCtx)
 	if err != nil {
 		return nil, fmt.Errorf("seal scope %s: capture workspace: %w", scopeID, err)
 	}
@@ -395,12 +418,12 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 	// have been reclaimed. Backends without the capability (their deltas
 	// need no base) seal unchanged.
 	if ann, ok := sb.(sandbox.DeltaBaseAnnotator); ok {
-		if err := ann.AnnotateDeltaBase(ctx, &ws, baseline); err != nil {
+		if err := ann.AnnotateDeltaBase(sealCtx, &ws, baseline); err != nil {
 			return nil, fmt.Errorf("seal scope %s: record delta base: %w", scopeID, err)
 		}
 	}
 
-	diff, files, err := sb.Diff(ctx, baseline, 0)
+	diff, files, err := sb.Diff(sealCtx, baseline, 0)
 	if err != nil {
 		return nil, fmt.Errorf("seal scope %s: diff against baseline: %w", scopeID, err)
 	}
@@ -469,7 +492,7 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 	var written []sealBlobRef
 	cleanup := func() {
 		for _, b := range written {
-			if err := trace.DeleteBlob(ctx, s.store, ownerID, b.kind, b.key); err != nil {
+			if err := trace.DeleteBlob(sealCtx, s.store, ownerID, b.kind, b.key); err != nil {
 				slog.Warn("seal: failed to remove blob after a failed seal", "output", out.id, "kind", b.kind, "err", err)
 			}
 		}
@@ -478,24 +501,24 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 	payload["diff_size"] = len(retainedDiff)
 	payload["diff_original_size"] = len(diff)
 	payload["diff_truncated"] = diffTruncated
-	if err := putSealText(ctx, s.store, ownerID, out.id, sealBlobDiff, "diff", payload, retainedDiff, &written); err != nil {
+	if err := putSealText(sealCtx, s.store, ownerID, out.id, sealBlobDiff, "diff", payload, retainedDiff, &written); err != nil {
 		cleanup()
 		return nil, fmt.Errorf("seal scope %s: persist diff: %w", scopeID, err)
 	}
 	if len(out.snapshot) > 0 {
-		if err := putSealValue(ctx, s.store, ownerID, out.id, sealBlobSnapshot, "snapshot", payload, out.snapshot, &written); err != nil {
+		if err := putSealValue(sealCtx, s.store, ownerID, out.id, sealBlobSnapshot, "snapshot", payload, out.snapshot, &written); err != nil {
 			cleanup()
 			return nil, fmt.Errorf("seal scope %s: persist snapshot: %w", scopeID, err)
 		}
 	}
 	if len(out.metadata) > 0 {
-		if err := putSealValue(ctx, s.store, ownerID, out.id, sealBlobMetadata, "metadata", payload, out.metadata, &written); err != nil {
+		if err := putSealValue(sealCtx, s.store, ownerID, out.id, sealBlobMetadata, "metadata", payload, out.metadata, &written); err != nil {
 			cleanup()
 			return nil, fmt.Errorf("seal scope %s: persist metadata: %w", scopeID, err)
 		}
 	}
 
-	receipt, err := s.store.Append(ctx, trace.TrustedAppendContext, trace.AppendBatch{
+	receipt, err := s.store.Append(sealCtx, trace.TrustedAppendContext, trace.AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:seal:%d", ownerID, seq),
 		Groups: []trace.AppendGroup{{
 			TraceOwnerID: ownerID,
