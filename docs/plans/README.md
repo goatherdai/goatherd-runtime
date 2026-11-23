@@ -262,6 +262,15 @@ boundary means it cannot govern every file effect.
   and both `sandbox/landlock/v0.1.0` and `v0.1.1` are tagged, with
   `release-verify` proving each resolves from a clean consumer.
 
+## Design notes
+
+- **Failed-seal recovery** (bead `shepherd-runtime-go-mtf`, cross-repo tracker
+  `yaah-9nqf`): durable failed-seal artifacts, a bounded finalization phase,
+  and recovery handles that can seed a fresh dispatch —
+  [`../designs/failed-seal-recovery.md`](../designs/failed-seal-recovery.md).
+  Runtime implemented and decisions resolved; the yaah integration
+  (`yaah-9nqf`) is still pending.
+
 ## Gap inventory → plan
 
 | Gap (vs Python) | Status | Closed by |

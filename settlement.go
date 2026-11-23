@@ -38,12 +38,6 @@ const DefaultDiffCap = 1 << 20
 // inline megabytes into the append-only trace.
 const sealInlineLimit = 4 << 10
 
-// sealCleanupTimeout bounds the best-effort removal of blobs a failed seal
-// already wrote. Cleanup detaches from the seal context (see
-// newSealCleanupContext) and so carries its own deadline instead of relying on
-// the caller's.
-const sealCleanupTimeout = 5 * time.Second
-
 // Named-blob kinds for seal payloads. The blob key is the output id.
 const (
 	sealBlobSnapshot = "sealed_snapshot"
@@ -84,16 +78,21 @@ type SealOptions struct {
 	// output's SupersededBy() reports this output after the seal: live when
 	// sealed through ScopeManager.Seal, or rebuilt on recovery.
 	Supersedes string
-	// SealContext is the finalization context Seal uses for its durable work:
-	// the sandbox capture, the delta annotation, the diff, and the trace/blob
-	// writes. When nil, Seal uses its ctx argument.
-	//
-	// Set it when the ctx argument carries a deadline that has already
-	// elapsed — an attempt deadline consumed by the run body, for example —
-	// but the caller still wants to seal. SealContext must be live and remain
-	// cancellable with the caller: derive it from a still-live parent, not
-	// from the expired attempt context. When SealContext is set, cancellation
-	// flows through it rather than through the ctx argument.
+	// AttemptID is the host's opaque identifier for the run that produced the
+	// work. It is recorded on the failed-seal artifact so a host can match a
+	// handle to the dispatch that created it.
+	AttemptID string
+	// TranscriptID is the fact id returned by PersistAttemptTranscript. When
+	// set, the sealed fact cites the journal instead of duplicating the
+	// conversation as a snapshot, and a failed seal can always recover it.
+	TranscriptID string
+	// Finalization overrides how the durable part of the seal is
+	// context-bound. The zero value runs finalization detached from the
+	// caller's cancellation with a bounded deadline (see FinalizationOptions).
+	Finalization FinalizationOptions
+	// SealContext is the v0.25.0 compatibility alias for
+	// Finalization.Context with FinalizationInherit mode. Deprecated: use
+	// Finalization. Setting both is an error.
 	SealContext context.Context
 }
 
@@ -111,19 +110,31 @@ func singleSealOptions(opts []SealOptions) (SealOptions, error) {
 	case 0:
 		return SealOptions{}, nil
 	case 1:
-		return opts[0], nil
+		opt := opts[0]
+		if opt.Finalization.Context != nil && opt.SealContext != nil {
+			return SealOptions{}, errors.New("seal: set either Finalization.Context or SealContext, not both")
+		}
+		if opt.SealContext != nil && opt.Finalization.Context == nil {
+			// Preserve any mode/timeout the caller also supplied; only the
+			// default mode is Inherit, matching v0.25.0's alias semantics.
+			if opt.Finalization.Mode == "" {
+				opt.Finalization.Mode = FinalizationInherit
+			}
+			opt.Finalization.Context = opt.SealContext
+			// ScopeManager.Seal normalizes options before handing them to
+			// Scope.Seal; clearing the alias prevents a second mapping from
+			// looking like a conflict.
+			opt.SealContext = nil
+		}
+		switch opt.Finalization.Mode {
+		case "", FinalizationDetached, FinalizationInherit:
+		default:
+			return SealOptions{}, fmt.Errorf("seal: unknown finalization mode %q", opt.Finalization.Mode)
+		}
+		return opt, nil
 	default:
 		return SealOptions{}, fmt.Errorf("seal accepts at most one SealOptions, got %d", len(opts))
 	}
-}
-
-// newSealCleanupContext returns the context used to remove blobs after a failed
-// seal. It must not inherit sealCtx's cancellation — cancellation is often the
-// very reason the seal failed — so it detaches from sealCtx with
-// WithoutCancel (keeping the context values, so the trace auth travels with
-// them), then adds its own bounded deadline via sealCleanupTimeout.
-func newSealCleanupContext(sealCtx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithoutCancel(sealCtx), sealCleanupTimeout)
 }
 
 // SettlementAction is how a sealed output is consumed exactly once.
@@ -225,6 +236,12 @@ type RetainedOutput struct {
 	mgr *ScopeManager
 	// sealedFactID cites the sealed record from the settled record.
 	sealedFactID string
+	// transcriptID cites the durable attempt transcript when the seal used
+	// the journal instead of duplicating the conversation as a snapshot.
+	transcriptID string
+	// artifactID cites the Tier-1 failed-seal artifact written before this
+	// seal's durable work. A successful seal resolves that artifact.
+	artifactID string
 }
 
 // ID returns the output's unique identifier ("out:<owner>:<seq>").
@@ -388,18 +405,6 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 		return nil, err
 	}
 
-	// The finalization context is the seal's execution context: the sandbox
-	// capture, delta annotation, diff, and every durable write. It defaults
-	// to the ctx argument. A caller whose ctx carries an already-elapsed
-	// deadline (an attempt deadline the run body consumed) supplies a live
-	// SealContext instead — one derived from a still-live parent, so the seal
-	// stays cancellable with the caller without inheriting the expired
-	// deadline.
-	sealCtx := ctx
-	if opt.SealContext != nil {
-		sealCtx = opt.SealContext
-	}
-
 	s.mu.RLock()
 	state := s.state
 	sb := s.sandbox
@@ -422,9 +427,85 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 		derivedFrom = opt.DerivedFrom
 	}
 
+	// Finalization is a distinct phase: durable work gets its own bounded
+	// context instead of inheriting an attempt deadline that may already
+	// have expired (the failure mode behind shepherd-runtime-go-mtf).
+	sealCtx, cancel := finalize(ctx, opt.Finalization)
+	defer cancel()
+
+	// Preflight: never open a doomed transaction on an already-dead context.
+	if err := sealCtx.Err(); err != nil {
+		return nil, &SealError{Stage: "preflight", Err: fmt.Errorf("%w: %v", ErrSealDeadlineBeforePersist, err)}
+	}
+
+	// A caller-supplied transcript must be a real, digest-verified fact on
+	// this scope. Rejecting it before the artifact is written keeps every
+	// surfaced handle capable of reseeding its own conversation.
+	var transcriptBytes []byte
+	if opt.TranscriptID != "" {
+		var err error
+		transcriptBytes, err = verifyTranscriptRef(sealCtx, s.store, ownerID, scopeID, opt.TranscriptID)
+		if err != nil {
+			return nil, &SealError{Stage: "transcript", Err: err}
+		}
+	}
+
+	// Tier 1: the recovery handle exists before capture, diff, or any blob
+	// write, so a failure at any later stage can always name an artifact.
+	// The prospective output id is reserved here too: failed-seal blobs use
+	// that key, so a successful seal and its failed counterpart share the
+	// same blob-addressing contract.
+	seq := nextCheckpointSeq.Add(1)
+	outputID := fmt.Sprintf("out:%s:%d", ownerID, seq)
+	artifactID := fmt.Sprintf("art:%s:%d", ownerID, seq)
+	if err := recordSealArtifact(sealCtx, s.store, ownerID, scopeID, artifactID, outputID, opt.AttemptID, opt.TranscriptID, baseline, derivedFrom, opt.Supersedes); err != nil {
+		return nil, &SealError{Stage: "artifact", Err: err}
+	}
+	var captured trace.WorkspaceState
+	var changeList []ProposedChange
+	var diffText string
+	var metadata []byte
+	failWith := func(stage string, cause error, written []sealBlobRef) (*RetainedOutput, error) {
+		blobs := valueKinds(written)
+		present := make([]string, 0, 3)
+		if diffText != "" {
+			present = append(present, "diff")
+		}
+		if len(metadata) > 0 && opt.TranscriptID == "" {
+			present = append(present, "metadata")
+		}
+		recordSealFailed(sealCtx, s.store, ownerID, artifactID, stage, cause.Error(), present, blobs)
+		handle := &FailedSeal{
+			ID:                artifactID,
+			ArtifactID:        artifactID,
+			OutputID:          outputID,
+			ScopeID:           scopeID,
+			OwnerID:           ownerID,
+			AttemptID:         opt.AttemptID,
+			TranscriptID:      opt.TranscriptID,
+			Transcript:        transcriptBytes,
+			TranscriptInvalid: opt.TranscriptID != "" && transcriptBytes == nil,
+			Workspace:         captured,
+			Baseline:          baseline,
+			Changes:           changeList,
+			Diff:              diffText,
+			Metadata:          metadata,
+			Values:            present,
+			Blobs:             blobs,
+			CreatedAt:         time.Now().UnixNano(),
+			Stage:             stage,
+			Reason:            cause.Error(),
+			Adopted:           true, // the scope's own sandbox is still live here
+		}
+		return nil, &SealError{Stage: stage, ArtifactID: artifactID, Err: cause, Handle: handle}
+	}
+	fail := func(stage string, cause error) (*RetainedOutput, error) {
+		return failWith(stage, cause, nil)
+	}
+
 	ws, err := sb.Capture(sealCtx)
 	if err != nil {
-		return nil, fmt.Errorf("seal scope %s: capture workspace: %w", scopeID, err)
+		return fail("capture", err)
 	}
 
 	// The output's delta must carry its merge base recorded now, at seal
@@ -434,23 +515,38 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 	// need no base) seal unchanged.
 	if ann, ok := sb.(sandbox.DeltaBaseAnnotator); ok {
 		if err := ann.AnnotateDeltaBase(sealCtx, &ws, baseline); err != nil {
-			return nil, fmt.Errorf("seal scope %s: record delta base: %w", scopeID, err)
+			return fail("delta_base", err)
 		}
 	}
 
 	diff, files, err := sb.Diff(sealCtx, baseline, 0)
 	if err != nil {
-		return nil, fmt.Errorf("seal scope %s: diff against baseline: %w", scopeID, err)
+		return fail("diff", err)
 	}
 	retainedDiff, diffTruncated := boundDiff(diff, opt.DiffCap)
+	changes := classifyChanges(diff, files)
+	stateDigest, _ := ws.Digest()
+	captured, changeList, diffText = ws, changes, retainedDiff
 
-	seq := nextCheckpointSeq.Add(1)
+	// Tier 2 metadata: workspace state and the change list are small and
+	// inline, so they survive even when the larger values cannot be written.
+	if err := recordSealValues(sealCtx, s.store, ownerID, artifactID, map[string]any{
+		"state":              workspacePayload(ws),
+		"state_digest":       stateDigest,
+		"changes":            changesPayload(changes),
+		"diff_size":          len(retainedDiff),
+		"diff_original_size": len(diff),
+		"diff_truncated":     diffTruncated,
+	}); err != nil {
+		return fail("values", err)
+	}
+
 	out := &RetainedOutput{
-		id:               fmt.Sprintf("out:%s:%d", ownerID, seq),
+		id:               outputID,
 		scopeID:          scopeID,
 		workspace:        ws,
 		baseline:         baseline,
-		changes:          classifyChanges(diff, files),
+		changes:          changes,
 		diff:             retainedDiff,
 		snapshot:         append([]byte(nil), opt.Snapshot...),
 		metadata:         append([]byte(nil), opt.Metadata...),
@@ -462,10 +558,10 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 		sealedAt:         time.Now(),
 	}
 
-	stateDigest, _ := ws.Digest()
 	baselineDigest, _ := baseline.Digest()
 	payload := map[string]any{
 		"output_id":       out.id,
+		"artifact_id":     artifactID,
 		"scope":           scopeID,
 		"backend":         ws.Backend,
 		"revision":        ws.Revision,
@@ -476,17 +572,22 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 		// recovery (plan 05 section 4) rebuilds settle-able outputs:
 		// digests alone cannot restore a WorkspaceState, and the
 		// overlap guard needs the paths.
-		"state": map[string]any{
-			"backend":  ws.Backend,
-			"revision": ws.Revision,
-			"data":     ws.Data,
-		},
-		"baseline": map[string]any{
-			"backend":  baseline.Backend,
-			"revision": baseline.Revision,
-			"data":     baseline.Data,
-		},
-		"changes": changesPayload(out.changes),
+		"state":    workspacePayload(ws),
+		"baseline": workspacePayload(baseline),
+		"changes":  changesPayload(out.changes),
+	}
+	out.artifactID = artifactID
+	metadata = out.metadata
+	// A later successful seal of the same scope resolves earlier artifacts
+	// even when it uses a fresh artifact id (a direct retry).
+	payload["sealed_at"] = out.sealedAt.UnixNano()
+	if opt.TranscriptID != "" {
+		// The conversation is durable in its own fact; do not duplicate it
+		// into the sealed payload or the blob store. The in-memory accessor
+		// still reports the already-verified bytes, and recovery restores
+		// them from the same fact.
+		payload["transcript_id"] = opt.TranscriptID
+		out.snapshot = transcriptBytes
 	}
 	// Lineage is recorded on the output's own fact; the reverse edge
 	// (supersededBy) is derived from a later output's supersedes value at
@@ -498,45 +599,69 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 		payload["supersedes"] = out.supersedes
 	}
 
-	// The retained diff and the caller's opaque values are frozen beside
-	// the output. Blobs are written before the fact so the fact never
-	// references missing bytes. Track them so a failed seal removes what it
-	// wrote instead of leaking unreferenced bytes. A process crash between a
-	// PutBlob and the append can still leave unreferenced blobs (there is no
-	// garbage collector); recovery is unaffected because no fact names them.
+	// Values are keyed by the output id reserved when the artifact was
+	// written: a failed seal owns them and only DiscardFailedSeal removes
+	// them. A failure no longer
+	// deletes what it wrote — those bytes are the recovery payload named by
+	// the failed-seal record. (A fact never references bytes it did not
+	// write: blobs are always written before the fact that cites them.)
 	var written []sealBlobRef
-	cleanup := func() {
-		// Detach from sealCtx: a failed seal is often failed *because* sealCtx
-		// was canceled, and the removal must still run.
-		cleanupCtx, cancel := newSealCleanupContext(sealCtx)
-		defer cancel()
-		for _, b := range written {
-			if err := trace.DeleteBlob(cleanupCtx, s.store, ownerID, b.kind, b.key); err != nil {
-				slog.Warn("seal: failed to remove blob after a failed seal", "output", out.id, "kind", b.kind, "err", err)
-			}
-		}
-	}
 
 	payload["diff_size"] = len(retainedDiff)
 	payload["diff_original_size"] = len(diff)
 	payload["diff_truncated"] = diffTruncated
-	if err := putSealText(sealCtx, s.store, ownerID, out.id, sealBlobDiff, "diff", payload, retainedDiff, &written); err != nil {
-		cleanup()
-		return nil, fmt.Errorf("seal scope %s: persist diff: %w", scopeID, err)
+	if err := sealCtx.Err(); err != nil {
+		return fail("persist_diff", fmt.Errorf("%w: %v", ErrSealDeadlineBeforePersist, err))
 	}
-	if len(out.snapshot) > 0 {
-		if err := putSealValue(sealCtx, s.store, ownerID, out.id, sealBlobSnapshot, "snapshot", payload, out.snapshot, &written); err != nil {
-			cleanup()
-			return nil, fmt.Errorf("seal scope %s: persist snapshot: %w", scopeID, err)
+	if err := putSealText(sealCtx, s.store, ownerID, outputID, sealBlobDiff, "diff", payload, retainedDiff, &written); err != nil {
+		return failWith("persist_diff", err, written)
+	}
+	if len(out.snapshot) > 0 && opt.TranscriptID == "" {
+		if err := sealCtx.Err(); err != nil {
+			return failWith("persist_snapshot", fmt.Errorf("%w: %v", ErrSealDeadlineBeforePersist, err), written)
+		}
+		if err := putSealValue(sealCtx, s.store, ownerID, outputID, sealBlobSnapshot, "snapshot", payload, out.snapshot, &written); err != nil {
+			return failWith("persist_snapshot", err, written)
 		}
 	}
 	if len(out.metadata) > 0 {
-		if err := putSealValue(sealCtx, s.store, ownerID, out.id, sealBlobMetadata, "metadata", payload, out.metadata, &written); err != nil {
-			cleanup()
-			return nil, fmt.Errorf("seal scope %s: persist metadata: %w", scopeID, err)
+		if err := sealCtx.Err(); err != nil {
+			return failWith("persist_metadata", fmt.Errorf("%w: %v", ErrSealDeadlineBeforePersist, err), written)
+		}
+		if err := putSealValue(sealCtx, s.store, ownerID, outputID, sealBlobMetadata, "metadata", payload, out.metadata, &written); err != nil {
+			return failWith("persist_metadata", err, written)
 		}
 	}
+	// Always record the values that landed, including inline ones: they live
+	// only in the sealed payload, which never arrives when the append fails.
+	present := []string{"diff"}
+	if len(out.metadata) > 0 {
+		present = append(present, "metadata")
+	}
+	if len(out.snapshot) > 0 && opt.TranscriptID == "" {
+		present = append(present, "snapshot")
+	}
+	valuesPayload := map[string]any{
+		"values": present,
+		"blobs":  valueKinds(written),
+	}
+	for _, key := range []string{"diff", "metadata", "snapshot"} {
+		if inline, ok := payload[key].(string); ok {
+			valuesPayload[key] = inline
+		}
+	}
+	if err := recordSealValues(sealCtx, s.store, ownerID, artifactID, valuesPayload); err != nil {
+		return failWith("values", err, written)
+	}
 
+	if err := sealCtx.Err(); err != nil {
+		return failWith("sealed_append", fmt.Errorf("%w: %v", ErrSealDeadlineBeforePersist, err), written)
+	}
+	if sealFault != nil {
+		if err := sealFault("sealed_append"); err != nil {
+			return failWith("sealed_append", err, written)
+		}
+	}
 	receipt, err := s.store.Append(sealCtx, trace.TrustedAppendContext, trace.AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:seal:%d", ownerID, seq),
 		Groups: []trace.AppendGroup{{
@@ -550,13 +675,28 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 		}},
 	})
 	if err != nil {
-		cleanup()
-		return nil, fmt.Errorf("seal scope %s: record sealed output: %w", scopeID, err)
+		return failWith("sealed_append", err, written)
 	}
 	if len(receipt.FactIDs) > 0 {
 		out.sealedFactID = receipt.FactIDs[0]
 	}
 	return out, nil
+}
+
+// sealFault is an unexported test seam. In-package tests inject a failure at
+// a named finalization stage to exercise failed-seal artifact paths that are
+// otherwise hard to provoke deterministically (for example, an append fault
+// after the diff blob was written). Production never sets it.
+var sealFault func(stage string) error
+
+// valueKinds names the blobs written for an artifact, for the failed-seal
+// record and the Tier-2 values fact.
+func valueKinds(written []sealBlobRef) []string {
+	out := make([]string, 0, len(written))
+	for _, b := range written {
+		out = append(out, b.kind)
+	}
+	return out
 }
 
 // changesPayload renders a change list as trace payload entries.
@@ -609,32 +749,32 @@ func trimToRuneBoundary(s string, n int) string {
 // when it fits sealInlineLimit, otherwise a kernel named blob referenced by
 // digest and size. prefix selects the payload keys: prefix, prefix_digest,
 // and prefix_size.
-func putSealValue(ctx context.Context, store *trace.SQLiteTraceStore, ownerID, outputID, blobKind, prefix string, payload map[string]any, data []byte, written *[]sealBlobRef) error {
+func putSealValue(ctx context.Context, store *trace.SQLiteTraceStore, ownerID, key, blobKind, prefix string, payload map[string]any, data []byte, written *[]sealBlobRef) error {
 	if len(data) <= sealInlineLimit {
 		payload[prefix] = base64.StdEncoding.EncodeToString(data)
 		payload[prefix+"_size"] = len(data)
 		return nil
 	}
-	digest, err := trace.PutBlob(ctx, store, ownerID, blobKind, outputID, data)
+	digest, err := trace.PutBlob(ctx, store, ownerID, blobKind, key, data)
 	if err != nil {
 		return err
 	}
 	payload[prefix+"_digest"] = digest
 	payload[prefix+"_size"] = len(data)
-	*written = append(*written, sealBlobRef{kind: blobKind, key: outputID})
+	*written = append(*written, sealBlobRef{kind: blobKind, key: key})
 	return nil
 }
 
 // putSealText writes an already-textual value: inline as the string itself
 // when it fits sealInlineLimit (so the diff is readable in the fact), else as
 // a named blob referenced by digest and size.
-func putSealText(ctx context.Context, store *trace.SQLiteTraceStore, ownerID, outputID, blobKind, prefix string, payload map[string]any, text string, written *[]sealBlobRef) error {
+func putSealText(ctx context.Context, store *trace.SQLiteTraceStore, ownerID, key, blobKind, prefix string, payload map[string]any, text string, written *[]sealBlobRef) error {
 	if len(text) <= sealInlineLimit {
 		payload[prefix] = text
 		payload[prefix+"_size"] = len(text)
 		return nil
 	}
-	return putSealValue(ctx, store, ownerID, outputID, blobKind, prefix, payload, []byte(text), written)
+	return putSealValue(ctx, store, ownerID, key, blobKind, prefix, payload, []byte(text), written)
 }
 
 // stateFor maps a settlement action to its terminal output state.
