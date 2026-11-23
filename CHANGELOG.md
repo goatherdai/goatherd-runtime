@@ -4,6 +4,22 @@ Notable changes to `goatherd-runtime`. This project follows
 [Semantic Versioning](https://semver.org/); while pre-1.0, minor releases may
 contain breaking changes, which are called out below.
 
+## [v0.25.0] - 2026-11-22
+
+### Added
+- **Live finalization context for Seal**: `SealOptions.SealContext` lets a
+  caller hand `Scope.Seal` / `ScopeManager.Seal` a finalization context that is
+  live and still cancellable with the parent, even when the seal's `ctx`
+  argument carries an already-elapsed attempt deadline. The seal's sandbox
+  capture, delta annotation, diff, and every durable write run under it
+  (yaah PR #369 handoff: timed-out proposals were losing partial work).
+
+### Fixed
+- **Failed seals no longer leak blobs**: the best-effort removal of blobs a
+  failed seal already wrote runs under a context detached from the seal
+  context's cancellation — cancellation is often why the seal failed — with its
+  own bounded deadline, instead of silently failing every `DeleteBlob`.
+
 ## [v0.24.0] - 2026-11-07
 
 ### Added
