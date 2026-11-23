@@ -38,6 +38,12 @@ const DefaultDiffCap = 1 << 20
 // inline megabytes into the append-only trace.
 const sealInlineLimit = 4 << 10
 
+// sealCleanupTimeout bounds the best-effort removal of blobs a failed seal
+// already wrote. Cleanup detaches from the seal context (see
+// newSealCleanupContext) and so carries its own deadline instead of relying on
+// the caller's.
+const sealCleanupTimeout = 5 * time.Second
+
 // Named-blob kinds for seal payloads. The blob key is the output id.
 const (
 	sealBlobSnapshot = "sealed_snapshot"
@@ -109,6 +115,15 @@ func singleSealOptions(opts []SealOptions) (SealOptions, error) {
 	default:
 		return SealOptions{}, fmt.Errorf("seal accepts at most one SealOptions, got %d", len(opts))
 	}
+}
+
+// newSealCleanupContext returns the context used to remove blobs after a failed
+// seal. It must not inherit sealCtx's cancellation — cancellation is often the
+// very reason the seal failed — so it detaches from sealCtx with
+// WithoutCancel (keeping the context values, so the trace auth travels with
+// them), then adds its own bounded deadline via sealCleanupTimeout.
+func newSealCleanupContext(sealCtx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(sealCtx), sealCleanupTimeout)
 }
 
 // SettlementAction is how a sealed output is consumed exactly once.
@@ -491,8 +506,12 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 	// garbage collector); recovery is unaffected because no fact names them.
 	var written []sealBlobRef
 	cleanup := func() {
+		// Detach from sealCtx: a failed seal is often failed *because* sealCtx
+		// was canceled, and the removal must still run.
+		cleanupCtx, cancel := newSealCleanupContext(sealCtx)
+		defer cancel()
 		for _, b := range written {
-			if err := trace.DeleteBlob(sealCtx, s.store, ownerID, b.kind, b.key); err != nil {
+			if err := trace.DeleteBlob(cleanupCtx, s.store, ownerID, b.kind, b.key); err != nil {
 				slog.Warn("seal: failed to remove blob after a failed seal", "output", out.id, "kind", b.kind, "err", err)
 			}
 		}

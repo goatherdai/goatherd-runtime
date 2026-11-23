@@ -138,6 +138,25 @@ func TestSeal_LiveFinalizationContext(t *testing.T) {
 	}
 }
 
+// TestSealCleanupContext_Detached pins the Qodo follow-up on PR #3: blob
+// cleanup after a failed seal must not inherit the seal context's cancellation
+// (cancellation is often why the seal failed) but must still carry its own
+// bounded deadline.
+func TestSealCleanupContext_Detached(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	cancel() // the seal context of a failed seal is already canceled
+
+	cleanupCtx, cleanupCancel := newSealCleanupContext(parent)
+	defer cleanupCancel()
+
+	if err := cleanupCtx.Err(); err != nil {
+		t.Fatalf("cleanup context inherited cancellation from seal ctx: %v", err)
+	}
+	if dl, ok := cleanupCtx.Deadline(); !ok || dl.IsZero() {
+		t.Fatal("cleanup context should carry its own bounded deadline")
+	}
+}
+
 // TestSettle_SelectOnUnmovedParent covers the select verb end to end:
 // fast-forward-only (strict digest equality), physical propagation, causal
 // merge, worktree teardown, consume-once.
