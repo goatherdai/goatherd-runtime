@@ -97,11 +97,10 @@ func TestSeal_FreezesChanges(t *testing.T) {
 	}
 }
 
-// TestSeal_LiveFinalizationContext pins the PR #369 handoff: Seal must be able
-// to finalize under a live context even when its ctx argument carries an
-// already-elapsed attempt deadline. SealOptions.SealContext is that live
-// finalization context; when set, it — not the expired argument — drives the
-// durable seal work, so cancellation flows through it.
+// TestSeal_LiveFinalizationContext pins the PR #369 handoff, now made
+// structural: finalization no longer inherits an attempt deadline that already
+// elapsed. The default succeeds; FinalizationInherit restores the old strict
+// cancellation; SealContext remains a deprecated alias of a live parent.
 func TestSeal_LiveFinalizationContext(t *testing.T) {
 	mgr := NewScopeManager(newMemStore(t))
 	repo := newTestRepo(t)
@@ -116,16 +115,17 @@ func TestSeal_LiveFinalizationContext(t *testing.T) {
 	expired, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 	defer cancel()
 
-	// Without a live finalization context the expired ctx must fail the seal.
-	if _, err := mgr.Seal(expired, child.ID()); err == nil {
-		t.Fatal("Seal with an expired ctx and no SealContext should fail")
+	// Strict inheritance still fails on an expired context.
+	if _, err := mgr.Seal(expired, child.ID(), SealOptions{
+		Finalization: FinalizationOptions{Mode: FinalizationInherit},
+	}); err == nil {
+		t.Fatal("Seal with FinalizationInherit and an expired ctx should fail")
 	}
 
-	// The failed seal must not have consumed the scope: a second seal with a
-	// live SealContext succeeds despite the same expired ctx argument.
-	out, err := mgr.Seal(expired, child.ID(), SealOptions{SealContext: context.Background()})
+	// Default detached finalization succeeds despite the same expired argument.
+	out, err := mgr.Seal(expired, child.ID())
 	if err != nil {
-		t.Fatalf("Seal with a live SealContext: %v", err)
+		t.Fatalf("Seal with default finalization: %v", err)
 	}
 	if out.ScopeID() != child.ID() {
 		t.Errorf("output scope = %q, want %q", out.ScopeID(), child.ID())
@@ -138,24 +138,9 @@ func TestSeal_LiveFinalizationContext(t *testing.T) {
 	}
 }
 
-// TestSealCleanupContext_Detached pins the Qodo follow-up on PR #3: blob
-// cleanup after a failed seal must not inherit the seal context's cancellation
-// (cancellation is often why the seal failed) but must still carry its own
-// bounded deadline.
-func TestSealCleanupContext_Detached(t *testing.T) {
-	parent, cancel := context.WithCancel(context.Background())
-	cancel() // the seal context of a failed seal is already canceled
-
-	cleanupCtx, cleanupCancel := newSealCleanupContext(parent)
-	defer cleanupCancel()
-
-	if err := cleanupCtx.Err(); err != nil {
-		t.Fatalf("cleanup context inherited cancellation from seal ctx: %v", err)
-	}
-	if dl, ok := cleanupCtx.Deadline(); !ok || dl.IsZero() {
-		t.Fatal("cleanup context should carry its own bounded deadline")
-	}
-}
+// The old blob-cleanup context helper is gone: a failed seal now retains the
+// blobs it wrote as the artifact's recovery payload. DiscardFailedSeal removes
+// them under its own bounded, detached context instead. See failed_seal_test.go.
 
 // TestSettle_SelectOnUnmovedParent covers the select verb end to end:
 // fast-forward-only (strict digest equality), physical propagation, causal

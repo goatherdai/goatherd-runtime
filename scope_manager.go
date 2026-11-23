@@ -20,6 +20,10 @@ type ScopeManager struct {
 	scopes      map[string]*Scope
 	checkpoints map[string]*Checkpoint
 	outputs     map[string]*RetainedOutput
+	// failedSeals holds the recovery handles rebuilt from failed-seal
+	// artifacts. A host surfaces them as recoverable proposals; the runtime
+	// never discards one on its own.
+	failedSeals map[string]*FailedSeal
 	// reviews is the recovered/recorded review provenance, keyed by child
 	// scope id. It holds the proposal and, once recorded, its decision.
 	reviews map[string]*MergeReview
@@ -40,6 +44,7 @@ func NewScopeManager(store *trace.SQLiteTraceStore) *ScopeManager {
 		scopes:      make(map[string]*Scope),
 		checkpoints: make(map[string]*Checkpoint),
 		outputs:     make(map[string]*RetainedOutput),
+		failedSeals: make(map[string]*FailedSeal),
 		reviews:     make(map[string]*MergeReview),
 		settleLocks: make(map[string]*sync.Mutex),
 	}
@@ -351,6 +356,17 @@ func (m *ScopeManager) Seal(ctx context.Context, scopeID string, opts ...SealOpt
 	}
 	out.mgr = m
 	m.outputs[out.id] = out
+	// A successful seal resolves the failed-seal artifact it wrote first:
+	// stop surfacing the handle in this live manager too, not only after a
+	// restart. The trace keeps both facts for audit.
+	if out.artifactID != "" {
+		delete(m.failedSeals, out.artifactID)
+	}
+	// A reseed cites the source artifact as derived_from; that seal is the
+	// recovery of the failed work too.
+	if out.DerivedFrom() != "" {
+		delete(m.failedSeals, out.DerivedFrom())
+	}
 	m.mu.Unlock()
 
 	// Link the reverse edge without holding the registry lock: Settle takes

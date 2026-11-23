@@ -4,6 +4,30 @@ Notable changes to `goatherd-runtime`. This project follows
 [Semantic Versioning](https://semver.org/); while pre-1.0, minor releases may
 contain breaking changes, which are called out below.
 
+## [Unreleased]
+
+### Added
+- **Failed-seal recovery**: `Seal` writes a Tier-1 `goatherd.seal.artifact.v1`
+  handle before capture/diff/blob work, attaches Tier-2 `seal.values.v1`
+  records, and records a `seal.failed.v1` event on failure. Blobs it wrote are
+  retained as the recovery payload instead of deleted. `RecoverScopes` rebuilds
+  `FailedSeal` handles (with digest-verified transcript, adoption and revision
+  staleness), and `ForkFromFailedSeal` seeds a fresh isolated child from one.
+- **Durable attempt transcript**: `ScopeManager.PersistAttemptTranscript`
+  writes the conversation before finalization, idempotently on `attempt_id`,
+  under its own bounded detached budget. `SealOptions.TranscriptID` cites it
+  instead of duplicating the bytes; `Snapshot()` is restored from the fact.
+- **Finalization phase**: `SealOptions.Finalization` runs durable seal work
+  detached from an expired attempt deadline by default; `FinalizationInherit`
+  restores strict cancellation, and `SealContext` remains a deprecated alias.
+  Typed `SealError`, `ErrSealDeadlineBeforePersist` and
+  `ErrSealTranscriptInvalid` replace string matching.
+
+### Fixed
+- A seal whose attempt deadline expired during finalization no longer loses
+  the worktree state and conversation: the artifact and transcript survive the
+  failed seal and can be reseeded (bead `shepherd-runtime-go-mtf`).
+
 ## [v0.25.0] - 2026-11-22
 
 ### Added

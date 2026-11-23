@@ -69,6 +69,14 @@ type RecoveryStats struct {
 	SealedOutputs   int
 	MergeProposals  int
 	MergeDecisions  int
+	// Failed-seal recovery counters: transcript facts, artifacts, terminal
+	// failure events, artifacts without a terminal event (interrupted), and
+	// host-discarded artifacts (not surfaced as handles).
+	TranscriptFacts  int
+	SealArtifacts    int
+	FailedSeals      int
+	InterruptedSeals int
+	DiscardedSeals   int
 	// Quarantined lists owners recovery dropped: owners whose terminal
 	// records contradict each other (e.g. both a merge and a discard), and
 	// their descendants, whose fork evidence lives on the distrusted trace.
@@ -251,6 +259,9 @@ func RecoverScopes(store *trace.SQLiteTraceStore, opts RecoverOptions) (*ScopeMa
 	if err != nil {
 		return nil, err
 	}
+	if err := recoverOutputTranscripts(ctx, mgr, store); err != nil {
+		return nil, err
+	}
 	proposalCount, decisionCount, err := recoverReviews(ctx, mgr, store, quarantinedSet)
 	if err != nil {
 		return nil, err
@@ -334,6 +345,21 @@ func RecoverScopes(store *trace.SQLiteTraceStore, opts RecoverOptions) (*ScopeMa
 	// Staleness runs after re-adoption: it needs the sandboxes.
 	if err := markStaleCheckpoints(ctx, mgr); err != nil {
 		return nil, err
+	}
+
+	// Failed-seal handles also need re-adopted sandboxes, for adoption and
+	// staleness. They are built last so they can see recovered outputs that
+	// resolved an artifact by a later successful seal.
+	transcripts, artifactCount, failures, interrupted, discards, err := recoverFailedSeals(ctx, mgr, store, quarantinedSet)
+	if err != nil {
+		return nil, err
+	}
+	if stats != nil {
+		stats.TranscriptFacts = transcripts
+		stats.SealArtifacts = artifactCount
+		stats.FailedSeals = failures
+		stats.InterruptedSeals = interrupted
+		stats.DiscardedSeals = discards
 	}
 
 	slog.Info("recovery: rebuilt scope registry from trace",
@@ -650,6 +676,8 @@ func recoverOutputs(ctx context.Context, mgr *ScopeManager, store *trace.SQLiteT
 		recoverSealValues(ctx, store, out, rec.OwnerID, rec.Payload)
 		out.derivedFrom, _ = rec.Payload["derived_from"].(string)
 		out.supersedes, _ = rec.Payload["supersedes"].(string)
+		out.transcriptID = strPayload(rec.Payload["transcript_id"])
+		out.artifactID = strPayload(rec.Payload["artifact_id"])
 		out.sealedFactID = rec.RecordID
 
 		if action, ok := terminals[id]; ok {
@@ -809,8 +837,11 @@ func workspaceStateFromPayload(raw map[string]any) trace.WorkspaceState {
 // absent rather than failing recovery for every other scope; the fact still
 // names the digest, so the loss is inspectable.
 func recoverSealValues(ctx context.Context, store *trace.SQLiteTraceStore, out *RetainedOutput, ownerID string, payload map[string]any) {
-	out.snapshot = recoverSealBytes(ctx, store, out.id, ownerID, sealBlobSnapshot, "snapshot", payload)
-	out.metadata = recoverSealBytes(ctx, store, out.id, ownerID, sealBlobMetadata, "metadata", payload)
+	// Seal blobs are keyed by output id. The failed-seal artifact reserves
+	// the same id so a failed seal can own those bytes for recovery.
+	blobKey := out.id
+	out.snapshot = recoverSealBytes(ctx, store, blobKey, ownerID, sealBlobSnapshot, "snapshot", payload)
+	out.metadata = recoverSealBytes(ctx, store, blobKey, ownerID, sealBlobMetadata, "metadata", payload)
 
 	out.diffTruncated, _ = payload["diff_truncated"].(bool)
 	if n, ok := payloadInt(payload["diff_original_size"]); ok {
@@ -818,7 +849,7 @@ func recoverSealValues(ctx context.Context, store *trace.SQLiteTraceStore, out *
 	}
 
 	if digest, _ := payload["diff_digest"].(string); digest != "" {
-		data, _, err := trace.GetBlob(ctx, store, ownerID, sealBlobDiff, out.id)
+		data, _, err := trace.GetBlob(ctx, store, ownerID, sealBlobDiff, blobKey)
 		if err != nil {
 			slog.Warn("recovery: read sealed diff blob failed", "output", out.id, "digest", digest, "err", err)
 			return
