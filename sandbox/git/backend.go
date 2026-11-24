@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	trace "github.com/goatherdai/goatherd-kernel"
@@ -250,6 +251,14 @@ type GitSandbox struct {
 	// the zero value is CleanAll, the historical destructive behavior. Set
 	// by WithCleanPolicy (clean_policy.go).
 	cleanPolicy CleanPolicy
+
+	// confinementWarned deduplicates the unavailable-confinement warning:
+	// Capabilities runs on every materialization and merge check, so the
+	// same reason must be logged once per sandbox, not per call. Guarded
+	// by its own mutex because Capabilities is read-mostly but callable
+	// concurrently.
+	confinementWarnMu sync.Mutex
+	confinementWarned string
 }
 
 // Option configures a GitSandbox at construction.
@@ -362,7 +371,10 @@ func (g *GitSandbox) Capabilities() sbx.SandboxCapabilities {
 	}
 	execEnabled := g.confiner != nil
 	if execEnabled {
-		if ok, _ := g.confiner.Available(); ok && g.placement != containment.PlacementAdvisory {
+		available, reason := g.confiner.Available()
+		if !available {
+			g.warnConfinementUnavailable(reason)
+		} else if g.placement != containment.PlacementAdvisory {
 			containmentLevel = trace.ContainContained
 		}
 	}
@@ -374,6 +386,22 @@ func (g *GitSandbox) Capabilities() sbx.SandboxCapabilities {
 		Isolated:    isolated,
 		Containment: containmentLevel,
 	}
+}
+
+// warnConfinementUnavailable keeps an unavailable backend's reason auditable
+// without flooding the log: a backend that reports unavailable must say why,
+// rather than silently downgrading containment, but Capabilities is called on
+// every workspace materialization and merge check, so the same reason is
+// logged once per sandbox. A changed reason (e.g. the backend recovered and
+// later failed differently) is logged again.
+func (g *GitSandbox) warnConfinementUnavailable(reason string) {
+	g.confinementWarnMu.Lock()
+	defer g.confinementWarnMu.Unlock()
+	if g.confinementWarned == reason {
+		return
+	}
+	g.confinementWarned = reason
+	slog.Warn("git sandbox: confinement backend unavailable", "reason", reason)
 }
 
 // Create validates the repository, and in worktree mode allocates the worktree.
