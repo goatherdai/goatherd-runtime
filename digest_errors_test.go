@@ -81,6 +81,15 @@ func TestSeal_DigestFailureIsTypedAndNoSealedFact(t *testing.T) {
 	if sealErr.Stage != "digest_state" || sealErr.ArtifactID == "" {
 		t.Fatalf("SealError = %+v, want digest_state with an artifact", sealErr)
 	}
+	// The live handle must still carry everything capture and diff produced:
+	// that state is what recovery seeds a continuation from, and it exists
+	// only in memory (the state values fact is never written on this path).
+	if sealErr.Handle == nil {
+		t.Fatal("SealError carries no handle")
+	}
+	if sealErr.Handle.Workspace.Backend != "git" || sealErr.Handle.Workspace.Revision != "unencodable" {
+		t.Fatalf("handle workspace = %+v, want the captured workspace state", sealErr.Handle.Workspace)
+	}
 	sealed, err := trace.ScanRecordsBySchema(ctx, store, SchemaRunOutputSealed)
 	if err != nil {
 		t.Fatal(err)

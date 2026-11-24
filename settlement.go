@@ -525,11 +525,17 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 	}
 	retainedDiff, diffTruncated := boundDiff(diff, opt.DiffCap)
 	changes := classifyChanges(diff, files)
+	// Record the capture before the digest check: capture and diff both
+	// succeeded, and a digest_state failure must still hand back a live
+	// handle carrying the workspace, changes and diff — that state is what
+	// recovery seeds a continuation from, and it exists only in memory
+	// here (the state values fact is deliberately never written on this
+	// path, so a restarted handle cannot recover it).
+	captured, changeList, diffText = ws, changes, retainedDiff
 	stateDigest, digestErr := ws.Digest()
 	if digestErr != nil {
 		return fail("digest_state", fmt.Errorf("digest sealed workspace: %w", digestErr))
 	}
-	captured, changeList, diffText = ws, changes, retainedDiff
 
 	// Tier 2 metadata: workspace state and the change list are small and
 	// inline, so they survive even when the larger values cannot be written.

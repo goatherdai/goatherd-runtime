@@ -1,9 +1,12 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -230,5 +233,27 @@ func TestGitSandbox_ExecExplicitTimeoutNotClamped(t *testing.T) {
 	}
 	if res.ExitCode != 0 || res.Stdout == "" {
 		t.Fatalf("result = %+v", res)
+	}
+}
+
+// TestGitSandbox_CapabilitiesWarnsUnavailableOnce pins the log contract for an
+// unavailable confinement backend: the reason stays auditable, but
+// Capabilities runs on every materialization and merge check, so the same
+// reason is logged once per sandbox rather than once per call.
+func TestGitSandbox_CapabilitiesWarnsUnavailableOnce(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	sb := NewLocalGitSandbox(newTestRepo(t), WithExec(&fakeConfiner{available: false}, containment.PlacementAuto))
+	for i := 0; i < 5; i++ {
+		caps := sb.Capabilities()
+		if caps.Containment != trace.ContainUncontained {
+			t.Fatalf("call %d: containment = %q, want uncontained", i, caps.Containment)
+		}
+	}
+	if n := strings.Count(buf.String(), "confinement backend unavailable"); n != 1 {
+		t.Fatalf("unavailable warnings = %d, want 1 (log: %s)", n, buf.String())
 	}
 }
