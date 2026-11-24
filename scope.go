@@ -367,7 +367,37 @@ func (s *Scope) forkWithBaseline(childOwnerID string, snapshot any, baseline tra
 		forkPayload[k] = v
 	}
 
-	// Record the fork event in the parent's trace to get a fork-point record.
+	child := &Scope{
+		id:          fmt.Sprintf("scope:%s", childOwnerID),
+		ownerID:     childOwnerID,
+		store:       s.store,
+		parent:      s,
+		snapshot:    snapshot,
+		state:       ScopeActive,
+		sandbox:     inheritedSandbox,
+		ownsSandbox: false,
+		baseline:    baseline,
+		derivedFrom: derivedFrom,
+	}
+
+	// The hook lets in-package tests simulate a parent that changes state
+	// after the baseline decision but before registration. Production never
+	// sets it.
+	if forkTestHook != nil {
+		forkTestHook()
+	}
+
+	// The fork fact and the in-process registration must be atomic: write
+	// the record under the same lock that rechecks the parent and installs
+	// the child. A parent that changed while the baseline was captured then
+	// fails BEFORE any durable fork fact exists, so recovery cannot
+	// resurrect a child that never existed (bead shepherd-runtime-go-2jd).
+	// Durable appends already run under this lock on the discard path.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.state != ScopeActive {
+		return nil, fmt.Errorf("scope %s was %s during fork", s.id, s.state)
+	}
 	forkReceipt, err := s.store.Append(context.Background(), trace.TrustedAppendContext, trace.AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:fork:%s:%d", s.ownerID, childOwnerID, nextCheckpointSeq.Add(1)),
 		Groups: []trace.AppendGroup{{
@@ -383,36 +413,17 @@ func (s *Scope) forkWithBaseline(childOwnerID string, snapshot any, baseline tra
 	if err != nil {
 		return nil, fmt.Errorf("record fork event: %w", err)
 	}
-
 	if len(forkReceipt.FactIDs) == 0 {
 		return nil, fmt.Errorf("record fork event: no fact ID returned for scope %s", s.id)
 	}
-	forkPointID := forkReceipt.FactIDs[0]
-
-	child := &Scope{
-		id:          fmt.Sprintf("scope:%s", childOwnerID),
-		ownerID:     childOwnerID,
-		store:       s.store,
-		parent:      s,
-		forkPoint:   forkPointID,
-		snapshot:    snapshot,
-		state:       ScopeActive,
-		sandbox:     inheritedSandbox,
-		ownsSandbox: false,
-		baseline:    baseline,
-		derivedFrom: derivedFrom,
-	}
-
-	s.mu.Lock()
-	if s.state != ScopeActive {
-		s.mu.Unlock()
-		return nil, fmt.Errorf("scope %s was %s during fork", s.id, s.state)
-	}
+	child.forkPoint = forkReceipt.FactIDs[0]
 	s.children = append(s.children, child)
-	s.mu.Unlock()
-
 	return child, nil
 }
+
+// forkTestHook is an unexported test seam for injecting a parent state change
+// between the baseline decision and fork registration. Production is nil.
+var forkTestHook func()
 
 // normalizeForkSnapshot maps a typed-nil snapshot (nil slice, map, pointer,
 // or interface) to untyped nil, so it is never persisted or reported as a
