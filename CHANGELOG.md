@@ -6,6 +6,9 @@ contain breaking changes, which are called out below.
 
 ## [Unreleased]
 
+### Fixed
+- A fork that fails because its parent changed state no longer leaves a durable `scope.forked` fact behind. The fork record is now appended under the same lock that registers the child, so `RecoverScopes` cannot resurrect a child that never existed in-process (bead `shepherd-runtime-go-2jd`).
+
 ### Added
 - **Failed-seal recovery**: `Seal` writes a Tier-1 `goatherd.seal.artifact.v1`
   handle before capture/diff/blob work, attaches Tier-2 `seal.values.v1`
