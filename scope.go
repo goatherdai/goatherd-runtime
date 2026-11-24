@@ -347,9 +347,11 @@ func (s *Scope) forkWithBaseline(childOwnerID string, snapshot any, baseline tra
 	}
 	if baseline.Backend != "" {
 		digest, err := baseline.Digest()
-		if err == nil {
-			forkPayload["baseline_digest"] = digest
+		if err != nil {
+			// The fork record is hard: no fact with an empty digest.
+			return nil, fmt.Errorf("fork scope %s: digest baseline: %w", s.id, err)
 		}
+		forkPayload["baseline_digest"] = digest
 		// The full baseline state rides in the payload so recovery can
 		// rebuild a child that can still propose merges and seal outputs:
 		// the digest alone cannot restore a WorkspaceState.

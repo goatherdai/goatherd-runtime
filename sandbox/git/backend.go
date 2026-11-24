@@ -362,7 +362,12 @@ func (g *GitSandbox) Capabilities() sbx.SandboxCapabilities {
 	}
 	execEnabled := g.confiner != nil
 	if execEnabled {
-		if ok, _ := g.confiner.Available(); ok && g.placement != containment.PlacementAdvisory {
+		available, reason := g.confiner.Available()
+		if !available {
+			// Keep the reason auditable: a backend that reports unavailable
+			// must say why, rather than silently downgrading containment.
+			slog.Warn("git sandbox: confinement backend unavailable", "reason", reason)
+		} else if g.placement != containment.PlacementAdvisory {
 			containmentLevel = trace.ContainContained
 		}
 	}

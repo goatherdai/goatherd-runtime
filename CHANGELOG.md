@@ -7,6 +7,7 @@ contain breaking changes, which are called out below.
 ## [Unreleased]
 
 ### Fixed
+- `WorkspaceState.Digest()` errors are no longer swallowed into empty digests on durable paths: checkpoint creation, seals, and forks now fail before writing a fact, while advisory records log the cause and omit the digest field. The git backend also logs the reason a confinement backend reports unavailable instead of discarding it (bead `shepherd-runtime-go-kli`).
 - A fork that fails because its parent changed state no longer leaves a durable `scope.forked` fact behind. The fork record is now appended under the same lock that registers the child, so `RecoverScopes` cannot resurrect a child that never existed in-process (bead `shepherd-runtime-go-2jd`).
 
 ### Added

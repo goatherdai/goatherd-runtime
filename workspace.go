@@ -112,7 +112,19 @@ func (s *Scope) recordWorkspaceEvent(
 	ws trace.WorkspaceState,
 ) {
 	seq := nextCheckpointSeq.Add(1)
-	digest, _ := ws.Digest()
+	digest, digestErr := ws.Digest()
+	if digestErr != nil {
+		// Advisory record: log the degraded digest instead of writing an
+		// empty string into the payload.
+		slog.Warn("workspace: digest state failed (advisory)", "kind", kindLabel, "err", digestErr)
+	}
+	payload := map[string]any{
+		"backend":  ws.Backend,
+		"revision": ws.Revision,
+	}
+	if digestErr == nil {
+		payload["state_digest"] = digest
+	}
 
 	_, err := s.store.Append(ctx, trace.TrustedAppendContext, trace.AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:workspace:%s:%d", ownerID, kindLabel, seq),
@@ -122,11 +134,7 @@ func (s *Scope) recordWorkspaceEvent(
 				Mode:      mode,
 				SchemaRef: schemaRef,
 				KindLabel: kindLabel,
-				Payload: map[string]any{
-					"backend":      ws.Backend,
-					"revision":     ws.Revision,
-					"state_digest": digest,
-				},
+				Payload:   payload,
 			}},
 		}},
 	})

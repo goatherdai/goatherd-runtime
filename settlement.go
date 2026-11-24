@@ -525,7 +525,10 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 	}
 	retainedDiff, diffTruncated := boundDiff(diff, opt.DiffCap)
 	changes := classifyChanges(diff, files)
-	stateDigest, _ := ws.Digest()
+	stateDigest, digestErr := ws.Digest()
+	if digestErr != nil {
+		return fail("digest_state", fmt.Errorf("digest sealed workspace: %w", digestErr))
+	}
 	captured, changeList, diffText = ws, changes, retainedDiff
 
 	// Tier 2 metadata: workspace state and the change list are small and
@@ -558,7 +561,10 @@ func (s *Scope) Seal(ctx context.Context, opts ...SealOptions) (*RetainedOutput,
 		sealedAt:         time.Now(),
 	}
 
-	baselineDigest, _ := baseline.Digest()
+	baselineDigest, digestErr := baseline.Digest()
+	if digestErr != nil {
+		return fail("digest_baseline", fmt.Errorf("digest fork baseline: %w", digestErr))
+	}
 	payload := map[string]any{
 		"output_id":       out.id,
 		"artifact_id":     artifactID,
@@ -1055,12 +1061,18 @@ func recordRunOutputSettled(ctx context.Context, scope *Scope, out *RetainedOutp
 	if out.sealedFactID != "" {
 		causedBy = []string{out.sealedFactID}
 	}
-	stateDigest, _ := out.workspace.Digest()
-
+	stateDigest, digestErr := out.workspace.Digest()
+	if digestErr != nil {
+		// Settlement's physical effects already happened; this record is
+		// advisory. Omit the digest rather than writing an empty one.
+		slog.Warn("settlement: digest settled workspace failed (advisory)", "output", out.id, "err", digestErr)
+	}
 	payload := map[string]any{
-		"output_id":    out.id,
-		"action":       string(action),
-		"state_digest": stateDigest,
+		"output_id": out.id,
+		"action":    string(action),
+	}
+	if digestErr == nil {
+		payload["state_digest"] = stateDigest
 	}
 	if out.derivedFrom != "" {
 		payload["derived_from"] = out.derivedFrom

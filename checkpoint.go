@@ -144,7 +144,12 @@ func (s *Scope) CreateCheckpoint(ctx context.Context, snapshot []byte) (*Checkpo
 		return nil, fmt.Errorf("checkpoint %s: %w", cp.ID, err)
 	}
 
-	digest, _ := ws.Digest()
+	digest, err := ws.Digest()
+	if err != nil {
+		// The checkpoint fact is hard: an unrecordable digest must not be
+		// silently replaced by an empty string in the durable trace.
+		return nil, fmt.Errorf("checkpoint %s: digest workspace: %w", cp.ID, err)
+	}
 	payload := map[string]any{
 		"checkpoint_id": cp.ID,
 		"backend":       ws.Backend,
@@ -232,7 +237,20 @@ func (s *Scope) RestoreCheckpoint(ctx context.Context, cp *Checkpoint) ([]byte, 
 		slog.Warn("checkpoint: delete persisted snapshot failed (advisory)", "checkpoint", cp.ID, "err", err)
 	}
 
-	digest, _ := cp.Workspace.Digest()
+	digest, digestErr := cp.Workspace.Digest()
+	if digestErr != nil {
+		// The restore record is advisory; the workspace was already applied.
+		// Omit the digest rather than recording an empty one, and say why.
+		slog.Warn("checkpoint: digest restored workspace failed (advisory)", "checkpoint", cp.ID, "err", digestErr)
+	}
+	restorePayload := map[string]any{
+		"checkpoint_id": cp.ID,
+		"backend":       cp.Workspace.Backend,
+		"revision":      cp.Workspace.Revision,
+	}
+	if digestErr == nil {
+		restorePayload["state_digest"] = digest
+	}
 	_, err := s.store.Append(ctx, trace.TrustedAppendContext, trace.AppendBatch{
 		AppendIntentID: fmt.Sprintf("%s:restore:%d", ownerID, cp.Seq),
 		Groups: []trace.AppendGroup{{
@@ -241,12 +259,7 @@ func (s *Scope) RestoreCheckpoint(ctx context.Context, cp *Checkpoint) ([]byte, 
 				Mode:      trace.Capture,
 				SchemaRef: SchemaCheckpointRestored,
 				KindLabel: "checkpoint:restored",
-				Payload: map[string]any{
-					"checkpoint_id": cp.ID,
-					"backend":       cp.Workspace.Backend,
-					"revision":      cp.Workspace.Revision,
-					"state_digest":  digest,
-				},
+				Payload:   restorePayload,
 			}},
 		}},
 	})
